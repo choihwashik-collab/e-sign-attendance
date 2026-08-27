@@ -6,10 +6,11 @@
 function doGet(e) {
   var params = e ? e.parameter : {};
   var action = params.action || 'ping';
+  var callback = params.callback;
   var ss = SpreadsheetApp.getActiveSpreadsheet();
 
   if (action === 'ping') {
-    return createJsonResponse({ status: 'ok', success: true, message: 'Google Apps Script 연결 성공' });
+    return createJsonResponse({ status: 'ok', success: true, message: '구글 스프레드시트 연결 성공!' }, callback);
   }
 
   if (action === 'getStatus') {
@@ -18,7 +19,6 @@ function doGet(e) {
     var data = sheet.getDataRange().getValues();
     var attendees = [];
 
-    // 헤더(1행) 제외하고 파싱
     for (var i = 1; i < data.length; i++) {
       var row = data[i];
       if (!row[0]) continue;
@@ -31,10 +31,10 @@ function doGet(e) {
         note: row[5]
       });
     }
-    return createJsonResponse({ status: 'ok', attendees: attendees });
+    return createJsonResponse({ status: 'ok', attendees: attendees }, callback);
   }
 
-  return createJsonResponse({ status: 'unknown_action' });
+  return createJsonResponse({ status: 'unknown_action' }, callback);
 }
 
 function doPost(e) {
@@ -133,7 +133,11 @@ function doPost(e) {
   }
 }
 
-function createJsonResponse(obj) {
+function createJsonResponse(obj, callback) {
+  if (callback) {
+    return ContentService.createTextOutput(callback + '(' + JSON.stringify(obj) + ')')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
