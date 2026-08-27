@@ -1,0 +1,178 @@
+/* styles/style.css */
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+
+:root {
+  --primary-color: #2563eb;
+  --primary-hover: #1d4ed8;
+  --success-color: #10b981;
+  --warning-color: #f59e0b;
+  --danger-color: #ef4444;
+}
+
+body {
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  background-color: #f8fafc;
+  color: #1e293b;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 터치 서명 캔버스 최적화 */
+.signature-canvas {
+  touch-action: none;
+  cursor: crosshair;
+  background-color: #ffffff;
+  border: 2px dashed #cbd5e1;
+  border-radius: 0.75rem;
+  transition: border-color 0.2s;
+}
+
+.signature-canvas:active,
+.signature-canvas.drawing {
+  border-color: #3b82f6;
+  border-style: solid;
+}
+
+/* 모바일 부드러운 스크롤 */
+.smooth-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 펄스 애니메이션 */
+@keyframes soft-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.02); }
+}
+
+.live-indicator {
+  animation: soft-pulse 2s infinite ease-in-out;
+}
+
+/* 탭 전환 트랜지션 */
+.tab-content {
+  display: none;
+  opacity: 0;
+  transition: opacity 0.25s ease-in-out;
+}
+
+.tab-content.active {
+  display: block;
+  opacity: 1;
+}
+
+/* 서명 패드 안내선 */
+.sign-guide-line {
+  position: absolute;
+  bottom: 30px;
+  left: 20px;
+  right: 20px;
+  height: 1px;
+  border-bottom: 1px dashed #cbd5e1;
+  pointer-events: none;
+}
+
+.sign-guide-text {
+  position: absolute;
+  bottom: 10px;
+  right: 25px;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+/* 인쇄 및 PDF 생성용 A4 공식 서명부 스타일 */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #print-document, #print-document * {
+    visibility: visible;
+  }
+  #print-document {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 15mm;
+    background: white;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+
+.a4-preview-paper {
+  width: 210mm;
+  min-height: 297mm;
+  padding: 18mm 15mm;
+  margin: 0 auto;
+  background: white;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  box-sizing: border-box;
+  font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
+  color: #111827;
+}
+
+@media (max-width: 850px) {
+  .a4-preview-paper {
+    width: 100%;
+    min-height: auto;
+    padding: 15px;
+  }
+}
+
+/* 출석부 표 스타일 */
+.doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.doc-table th, 
+.doc-table td {
+  border: 1px solid #374151;
+  padding: 6px 8px;
+  text-align: center;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.doc-table th {
+  background-color: #f3f4f6;
+  font-weight: 600;
+  color: #111827;
+}
+
+.doc-table td.signature-cell {
+  padding: 2px 4px;
+  height: 44px;
+}
+
+.doc-table td.signature-cell img {
+  max-height: 38px;
+  max-width: 90px;
+  margin: 0 auto;
+  display: block;
+  object-fit: contain;
+}
+
+/* 결재란 스타일 */
+.approval-box {
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.approval-box th, .approval-box td {
+  border: 1px solid #374151;
+  text-align: center;
+  padding: 4px 8px;
+}
+
+.approval-box th {
+  background-color: #f9fafb;
+}
+
+.approval-box td.sign-space {
+  height: 48px;
+  width: 65px;
+}
