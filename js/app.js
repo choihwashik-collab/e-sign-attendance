@@ -25,17 +25,8 @@ const AppState = {
   currentView: 'participant' // 'participant' | 'admin'
 };
 
-// 초기 기본 샘플 명단
-const DEFAULT_ATTENDEES = [
-  { id: 'att_1', department: '기획예산팀', name: '김철수', position: '팀장', isSigned: false, status: '미서명', signatureData: null, note: '' },
-  { id: 'att_2', department: '기획예산팀', name: '이영희', position: '대리', isSigned: false, status: '미서명', signatureData: null, note: '' },
-  { id: 'att_3', department: '교육연구부', name: '박민수', position: '부장', isSigned: false, status: '미서명', signatureData: null, note: '' },
-  { id: 'att_4', department: '교육연구부', name: '정다은', position: '연구원', isSigned: false, status: '미서명', signatureData: null, note: '' },
-  { id: 'att_5', department: '행정지원과', name: '홍길동', position: '주무관', isSigned: false, status: '미서명', signatureData: null, note: '' },
-  { id: 'att_6', department: '행정지원과', name: '최지우', position: '주임', isSigned: false, status: '출장', signatureData: null, note: '관외출장' },
-  { id: 'att_7', department: '디지털혁신팀', name: '강하늘', position: '과장', isSigned: false, status: '미서명', signatureData: null, note: '' },
-  { id: 'att_8', department: '디지털혁신팀', name: '윤서아', position: '사원', isSigned: false, status: '연가', signatureData: null, note: '오후반차' }
-];
+// 초기 기본 명단 (개인정보 보호를 위해 빈 배열로 유지, 명단 파일 업로드 시에만 채워짐)
+const DEFAULT_ATTENDEES = [];
 
 document.addEventListener('DOMContentLoaded', () => {
   App.init();
