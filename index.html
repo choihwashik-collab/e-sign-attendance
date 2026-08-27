@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>연수 참석자 전자 서명 시스템</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              800: '#1e40af',
+              900: '#1e3a8a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <!-- PDF.js for parsing PDF roster files -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+  </script>
+
+  <!-- SheetJS for Excel import/export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <!-- QRCode.js for generating QR code -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <!-- html2canvas and jsPDF for official PDF creation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="min-h-screen bg-slate-50 flex flex-col selection:bg-blue-200">
+
+  <!-- ==================== 글로벌 상단 네비게이션 ==================== -->
+  <header class="bg-gradient-to-r from-blue-900 via-blue-800 to-indigo-900 text-white shadow-md sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        
+        <!-- 서비스 로고 및 연수 타이틀 -->
+        <div class="flex items-center space-x-3 cursor-pointer" onclick="App.switchView('participant')">
+          <div class="w-10 h-10 rounded-xl bg-blue-600/60 border border-blue-400/40 flex items-center justify-center shadow-inner">
+            <i class="fas fa-signature text-xl text-blue-200"></i>
+          </div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="font-black text-lg tracking-tight text-white">E-Sign Attendance</span>
+              <span id="gas-sync-badge" class="hidden sm:inline-block"></span>
+            </div>
+            <p class="text-xs text-blue-200 truncate max-w-[200px] sm:max-w-md session-title-text">
+              2026년도 직무 역량강화 연수
+            </p>
+          </div>
+        </div>
+
+        <!-- 모드 전환 네비게이션 탭 -->
+        <div class="flex items-center space-x-2 bg-blue-950/60 p-1 rounded-xl border border-blue-700/50">
+          <button id="nav-btn-participant" data-switch-view="participant" class="px-3.5 py-1.5 rounded-lg text-sm font-semibold transition-all flex items-center space-x-1.5 bg-blue-700 text-white shadow-sm">
+            <i class="fas fa-mobile-alt"></i>
+            <span>참여자 서명</span>
+          </button>
+          <button id="nav-btn-admin" data-switch-view="admin" class="px-3.5 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center space-x-1.5 text-blue-100 hover:text-white hover:bg-blue-800/60">
+            <i class="fas fa-sliders-h"></i>
+            <span>진행자 관리</span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </header>
+
+  <!-- ==================== 메인 콘텐츠 영역 ==================== -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+
+    <!-- ========================================================================= -->
+    <!-- [VIEW 1] 참여자 스마트폰 서명 화면 (Mobile-First)                           -->
+    <!-- ========================================================================= -->
+    <section id="view-participant" class="max-w-xl mx-auto space-y-6">
+
+      <!-- 연수 개요 카드 -->
+      <div class="bg-gradient-to-br from-white to-blue-50/50 rounded-2xl p-5 border border-blue-100 shadow-sm relative overflow-hidden">
+        <div class="absolute -right-6 -bottom-6 w-28 h-28 bg-blue-100/50 rounded-full blur-2xl pointer-events-none"></div>
+        <div class="flex items-start justify-between">
+          <div>
+            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 mb-2">
+              <i class="fas fa-calendar-check mr-1"></i>출석 서명 진행 중
+            </span>
+            <h2 class="text-xl font-extrabold text-gray-900 session-title-text leading-snug">
+              2026년도 직무 역량강화 연수
+            </h2>
+          </div>
+        </div>
+
+        <div class="mt-3 pt-3 border-t border-blue-100/80 flex flex-wrap items-center gap-y-1.5 gap-x-4 text-xs text-gray-600">
+          <div class="flex items-center"><i class="far fa-calendar-alt text-blue-500 mr-1.5"></i><span class="session-date-text">2026-08-27</span></div>
+          <div class="flex items-center"><i class="fas fa-map-marker-alt text-red-500 mr-1.5"></i><span class="session-location-text">본관 대강당</span></div>
+        </div>
+      </div>
+
+      <!-- STEP 1: 참석자 본인 찾기 및 선택 -->
+      <div id="step-select-person" class="space-y-4">
+        
+        <div class="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="font-bold text-gray-900 text-base flex items-center">
+              <span class="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs mr-2">1</span>
+              본인 확인 및 서명하기
+            </h3>
+            <span class="text-xs text-gray-500">이름을 선택해 주세요</span>
+          </div>
+
+          <!-- 부서 필터 드롭다운 & 검색창 -->
+          <div class="space-y-2.5">
+            <div>
+              <label class="block text-xs font-semibold text-gray-700 mb-1">소속 부서 선택</label>
+              <select id="participant-dept-select" class="w-full bg-gray-50 border border-gray-300 rounded-xl px-3.5 py-2.5 text-sm font-medium text-gray-800 focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all outline-none">
+                <option value="ALL">전체 부서</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-gray-700 mb-1">이름으로 검색</label>
+              <div class="relative">
+                <i class="fas fa-search absolute left-3.5 top-3 text-gray-400 text-sm"></i>
+                <input type="text" id="participant-name-search" placeholder="성명을 입력하세요 (예: 홍길동)" class="w-full pl-9 pr-4 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all outline-none">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 명단 목록 카드 리스트 -->
+        <div class="space-y-2" id="participant-name-list">
+          <!-- JS 동적 렌더링 -->
+        </div>
+
+        <!-- 명단에 없는 경우 직접 추가 버튼 -->
+        <div class="pt-2">
+          <button id="btn-open-add-attendee" class="w-full py-3.5 px-4 bg-gradient-to-r from-slate-100 to-gray-100 hover:from-slate-200 hover:to-gray-200 border border-gray-300 rounded-xl text-gray-700 font-semibold text-sm flex items-center justify-center space-x-2 transition-all shadow-sm">
+            <i class="fas fa-user-plus text-blue-600"></i>
+            <span>명단에 내 이름이 없으신가요? (현장 등록)</span>
+          </button>
+        </div>
+
+      </div>
+
+      <!-- STEP 2: 전자 서명 캔버스 패드 -->
+      <div id="step-sign-canvas" class="hidden bg-white rounded-2xl p-5 border border-gray-200 shadow-md space-y-4 animate-fade-in">
+        
+        <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+          <div>
+            <span class="text-xs font-semibold text-blue-600 uppercase tracking-wide">서명 대상자</span>
+            <div class="flex items-center space-x-2 mt-0.5">
+              <h3 class="text-xl font-bold text-gray-900" id="signing-person-name">홍길동</h3>
+              <span class="text-xs font-medium text-gray-600 bg-gray-100 px-2 py-0.5 rounded-md" id="signing-person-dept">기획팀 · 과장</span>
+            </div>
+          </div>
+          <button id="btn-cancel-signature" class="text-xs text-gray-500 hover:text-gray-700 px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50">
+            <i class="fas fa-arrow-left mr-1"></i>다른 사람 선택
+          </button>
+        </div>
+
+        <!-- 캔버스 영역 -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between text-xs text-gray-500">
+            <span><i class="fas fa-pen-nib text-blue-600 mr-1"></i>아래 박스 안에 서명해 주세요</span>
+            <div class="flex items-center space-x-2">
+              <button id="btn-undo-signature" class="text-gray-600 hover:text-blue-600 p-1" title="한 획 취소">
+                <i class="fas fa-undo text-xs mr-1"></i>되돌리기
+              </button>
+              <button id="btn-clear-signature" class="text-red-500 hover:text-red-700 p-1" title="전체 지우기">
+                <i class="fas fa-eraser text-xs mr-1"></i>지우기
+              </button>
+            </div>
+          </div>
+
+          <div class="relative w-full aspect-[4/2.5] bg-white rounded-xl">
+            <canvas id="signature-canvas" class="signature-canvas w-full h-full"></canvas>
+            <div class="sign-guide-line"></div>
+            <div class="sign-guide-text">서명란 (Signature)</div>
+          </div>
+        </div>
+
+        <!-- 제출 버튼 -->
+        <button id="btn-submit-signature" class="w-full py-4 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-xl font-bold text-base shadow-lg shadow-blue-500/25 flex items-center justify-center space-x-2 transition-all transform active:scale-98">
+          <i class="fas fa-check-circle"></i>
+          <span>서명 제출 완료하기</span>
+        </button>
+
+      </div>
+
+      <!-- STEP 3: 서명 완료 안내 카드 -->
+      <div id="step-sign-complete" class="hidden bg-white rounded-2xl p-8 border border-emerald-200 shadow-md text-center space-y-4">
+        <div class="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto text-2xl shadow-inner">
+          <i class="fas fa-check"></i>
+        </div>
+        <div>
+          <h3 class="text-xl font-extrabold text-gray-900">서명이 정상 등록되었습니다!</h3>
+          <p class="text-sm text-gray-600 mt-1">
+            <strong id="complete-user-name" class="text-gray-900 font-bold"></strong> 님의 연수 참석 서명이 안전하게 기록되었습니다.
+          </p>
+          <p class="text-xs text-gray-400 mt-1 font-mono" id="complete-user-time"></p>
+        </div>
+        <div class="pt-3">
+          <button onclick="App.cancelSigning()" class="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl text-sm transition-all">
+            <i class="fas fa-users mr-1.5"></i>다음 사람 서명하기
+          </button>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ========================================================================= -->
+    <!-- [VIEW 2] 진행자 및 관리자 대시보드 화면 (Admin Dashboard)                  -->
+    <!-- ========================================================================= -->
+    <section id="view-admin" class="hidden space-y-6">
+
+      <!-- 상단 현황 통계 카드 -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div class="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
+          <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">총 대상자</div>
+          <div class="text-2xl sm:text-3xl font-black text-gray-900" id="stat-total-count">0명</div>
+        </div>
+        <div class="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
+          <div class="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-1">서명 완료</div>
+          <div class="text-2xl sm:text-3xl font-black text-emerald-600" id="stat-signed-count">0명</div>
+        </div>
+        <div class="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
+          <div class="text-xs font-semibold text-amber-600 uppercase tracking-wider mb-1">미서명 (진행 중)</div>
+          <div class="text-2xl sm:text-3xl font-black text-amber-600" id="stat-unsigned-count">0명</div>
+        </div>
+        <div class="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
+          <div class="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-1">실시간 진행률</div>
+          <div class="text-2xl sm:text-3xl font-black text-blue-600" id="stat-sign-rate">0%</div>
+        </div>
+      </div>
+
+      <!-- 진행률 바 -->
+      <div class="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+        <div id="stat-progress-bar" class="bg-gradient-to-r from-blue-500 to-emerald-500 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+      </div>
+
+      <!-- 관리자 서브 네비게이션 탭 -->
+      <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div class="flex border-b border-gray-200 overflow-x-auto smooth-scroll">
+          <button data-admin-tab="live" class="admin-tab-btn px-5 py-3.5 text-sm font-bold border-b-2 border-blue-600 text-blue-600 whitespace-nowrap flex items-center space-x-2">
+            <i class="fas fa-list-check"></i>
+            <span>출석 및 서명 현황</span>
+          </button>
+          <button data-admin-tab="import" class="admin-tab-btn px-5 py-3.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap flex items-center space-x-2">
+            <i class="fas fa-file-arrow-up"></i>
+            <span>사전 명단 등록 (PDF/Excel)</span>
+          </button>
+          <button data-admin-tab="qr" class="admin-tab-btn px-5 py-3.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap flex items-center space-x-2">
+            <i class="fas fa-qrcode"></i>
+            <span>QR코드 배포 & 공유</span>
+          </button>
+          <button data-admin-tab="document" class="admin-tab-btn px-5 py-3.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap flex items-center space-x-2">
+            <i class="fas fa-file-pdf"></i>
+            <span>공식 서명부 출력 (PDF/인쇄)</span>
+          </button>
+          <button data-admin-tab="settings" class="admin-tab-btn px-5 py-3.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap flex items-center space-x-2">
+            <i class="fas fa-cog"></i>
+            <span>연수·확인자·결재란 설정</span>
+          </button>
+        </div>
+
+        <!-- ------------------------------------------------------------- -->
+        <!-- TAB 1: 실시간 서명 현황판                                      -->
+        <!-- ------------------------------------------------------------- -->
+        <div id="tab-pane-live" class="admin-tab-pane p-5 space-y-4">
+          
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="flex items-center space-x-2">
+              <select id="admin-dept-filter" class="bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-xs font-semibold text-gray-700 outline-none">
+                <option value="ALL">전체 부서 보기</option>
+              </select>
+              <label class="inline-flex items-center space-x-1.5 text-xs text-gray-600 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 cursor-pointer">
+                <input type="checkbox" id="admin-toggle-unsigned-only" onchange="AppState.showUnsignedOnly=this.checked; App.renderAdminOverview();" class="rounded text-blue-600">
+                <span>미서명자만 보기</span>
+              </label>
+            </div>
+
+            <div class="flex items-center space-x-2">
+              <button onclick="document.getElementById('btn-open-add-attendee').click()" class="px-3.5 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold text-xs rounded-lg transition-all flex items-center space-x-1.5">
+                <i class="fas fa-user-plus"></i>
+                <span>참석자 수동 추가</span>
+              </button>
+              <button onclick="App.render()" class="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded-lg" title="새로고침">
+                <i class="fas fa-sync-alt"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- 참석자 명단 테이블 -->
+          <div class="overflow-x-auto rounded-xl border border-gray-200">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="bg-gray-50 text-gray-600 text-xs uppercase font-bold border-b border-gray-200">
+                  <th class="py-3 px-3 text-center w-12">No</th>
+                  <th class="py-3 px-3 text-center">소속 (부서)</th>
+                  <th class="py-3 px-3 text-center">직급</th>
+                  <th class="py-3 px-3 text-center">성명</th>
+                  <th class="py-3 px-3 text-center">상태 변경</th>
+                  <th class="py-3 px-3 text-center">서명 / 사유</th>
+                  <th class="py-3 px-3 text-center">비고</th>
+                  <th class="py-3 px-3 text-center w-14">관리</th>
+                </tr>
+              </thead>
+              <tbody id="admin-attendee-table-body" class="divide-y divide-gray-100 bg-white">
+                <!-- JS 동적 렌더링 -->
+              </tbody>
+            </table>
+          </div>
+
+        </div>
+
+        <!-- ------------------------------------------------------------- -->
+        <!-- TAB 2: 사전 명단 일괄 등록 (PDF/Excel)                           -->
+        <!-- ------------------------------------------------------------- -->
+        <div id="tab-pane-import" class="admin-tab-pane p-5 space-y-6 hidden">
+          
+          <div class="bg-blue-50/70 border border-blue-100 rounded-xl p-4 text-xs text-blue-900 space-y-1">
+            <div class="font-bold flex items-center text-blue-800">
+              <i class="fas fa-info-circle mr-1.5"></i>부서별 명단 등록 안내
+            </div>
+            <p>• <strong>부서별 명단이 적힌 PDF 파일</strong> 또는 <strong>엑셀(.xlsx, .csv)</strong> 파일을 드래그앤드롭하여 올려주세요.</p>
+            <p>• 시스템이 파일 내 텍스트를 자동 분석하여 <code>[부서명]</code>과 <code>[이름, 직급]</code>을 추출합니다.</p>
+          </div>
+
+          <!-- 드래그 앤 드롭 파일 업로드 영역 -->
+          <div id="roster-drop-zone" class="border-2 border-dashed border-gray-300 hover:border-blue-500 bg-gray-50 rounded-2xl p-8 text-center transition-all cursor-pointer">
+            <input type="file" id="roster-file-input" accept=".pdf,.xlsx,.xls,.csv,.txt" class="hidden">
+            <div onclick="document.getElementById('roster-file-input').click()">
+              <div class="w-14 h-14 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mx-auto text-2xl mb-3 shadow-inner">
+                <i class="fas fa-cloud-arrow-up"></i>
+              </div>
+              <p class="font-bold text-gray-800 text-base">명단 파일(PDF, Excel)을 여기에 끌어다 놓으세요</p>
+              <p class="text-xs text-gray-500 mt-1">또는 클릭하여 파일 선택 (.pdf, .xlsx, .xls, .csv, .txt)</p>
+            </div>
+            <div id="file-upload-status" class="mt-4 text-xs"></div>
+          </div>
+
+          <!-- 텍스트 직접 붙여넣기 모드 -->
+          <div class="border-t border-gray-200 pt-5 space-y-3">
+            <h4 class="font-bold text-sm text-gray-800 flex items-center">
+              <i class="fas fa-paste text-blue-600 mr-2"></i>텍스트로 직접 명단 붙여넣기
+            </h4>
+            <textarea id="textarea-roster-paste" rows="4" placeholder="예시:&#10;[기획예산팀]&#10;김철수 팀장&#10;이영희 대리&#10;&#10;[교육연구부]&#10;박민수 부장&#10;정다은 연구원" class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl text-xs font-mono focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"></textarea>
+            
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-4 text-xs text-gray-600">
+                <label class="flex items-center space-x-1.5 cursor-pointer">
+                  <input type="radio" name="roster-mode" id="radio-roster-replace" checked class="text-blue-600">
+                  <span>기존 명단 교체하기</span>
+                </label>
+                <label class="flex items-center space-x-1.5 cursor-pointer">
+                  <input type="radio" name="roster-mode" id="radio-roster-append" class="text-blue-600">
+                  <span>기존 명단 뒤에 추가하기</span>
+                </label>
+              </div>
+              <button id="btn-parse-text-roster" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl shadow-sm transition-all">
+                텍스트 명단 적용하기
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ------------------------------------------------------------- -->
+        <!-- TAB 3: QR코드 배포 & 공유                                     -->
+        <!-- ------------------------------------------------------------- -->
+        <div id="tab-pane-qr" class="admin-tab-pane p-5 space-y-6 hidden text-center">
+          
+          <div class="max-w-md mx-auto bg-slate-50 border border-gray-200 rounded-2xl p-6 space-y-4">
+            <h4 class="font-bold text-base text-gray-900">현장 프로젝터 / 참석자 서명용 QR코드</h4>
+            <p class="text-xs text-gray-500">참석자들이 스마트폰 카메라로 스캔하면 바로 본인 서명 페이지로 접속됩니다.</p>
+            
+            <div class="bg-white p-4 rounded-xl border border-gray-200 inline-block shadow-sm">
+              <div id="admin-qr-code-container" class="flex justify-center"></div>
+            </div>
+
+            <div class="text-xs text-gray-600 bg-white p-2.5 rounded-lg border border-gray-200 truncate font-mono" id="admin-qr-url-text">
+              https://...
+            </div>
+
+            <div class="flex items-center justify-center space-x-2 pt-2">
+              <button id="btn-open-fullscreen-qr" class="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md flex items-center space-x-1.5">
+                <i class="fas fa-expand"></i>
+                <span>빔프로젝터 전체화면 띄우기</span>
+              </button>
+              <button onclick="navigator.clipboard.writeText(document.getElementById('admin-qr-url-text').textContent); alert('서명 링크가 복사되었습니다!');" class="px-3.5 py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold text-xs rounded-xl">
+                <i class="fas fa-copy mr-1"></i>링크 복사
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ------------------------------------------------------------- -->
+        <!-- TAB 4: 공식 서명부 출력 (PDF 및 인쇄)                            -->
+        <!-- ------------------------------------------------------------- -->
+        <div id="tab-pane-document" class="admin-tab-pane p-5 space-y-5 hidden">
+          
+          <div class="flex flex-wrap items-center justify-between gap-3 bg-gray-50 p-4 rounded-xl border border-gray-200">
+            <div>
+              <h4 class="font-bold text-sm text-gray-900">공식 연수 출석 서명부</h4>
+              <p class="text-xs text-gray-500">실제 서명 이미지 및 출장/연가 사유가 삽입된 A4 서명부를 다운로드하거나 인쇄할 수 있습니다.</p>
+            </div>
+            <div class="flex items-center space-x-2">
+              <button id="btn-download-pdf" class="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl shadow-md flex items-center space-x-1.5 transition-all">
+                <i class="fas fa-file-pdf"></i>
+                <span>공식 서명부 PDF 다운로드</span>
+              </button>
+              <button id="btn-export-excel" class="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-md flex items-center space-x-1.5">
+                <i class="fas fa-file-excel"></i>
+                <span>엑셀(.xlsx) 내보내기</span>
+              </button>
+              <button id="btn-print-doc" class="px-3.5 py-2.5 bg-gray-800 hover:bg-gray-900 text-white font-semibold text-xs rounded-xl shadow-md flex items-center space-x-1.5">
+                <i class="fas fa-print"></i>
+                <span>바로 인쇄</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- A4 프리뷰 렌더링 컨테이너 -->
+          <div class="bg-gray-200/80 p-4 sm:p-8 rounded-2xl overflow-x-auto">
+            <div id="print-document">
+              <!-- JS 동적 A4 렌더링 -->
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ------------------------------------------------------------- -->
+        <!-- TAB 5: 연수·확인자·결재란 설정                                  -->
+        <!-- ------------------------------------------------------------- -->
+        <div id="tab-pane-settings" class="admin-tab-pane p-5 space-y-6 hidden">
+          
+          <!-- 연수 및 확인자/결재란 설정 -->
+          <form id="form-session-info" class="space-y-5">
+            <div>
+              <h4 class="font-bold text-sm text-gray-900 flex items-center mb-3">
+                <i class="fas fa-info-circle text-blue-600 mr-2"></i>연수 기본 정보
+              </h4>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-xs font-semibold text-gray-700 mb-1">연수 및 교육 명칭</label>
+                  <input type="text" id="input-session-title" required class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                  <label class="block text-xs font-semibold text-gray-700 mb-1">일시</label>
+                  <input type="date" id="input-session-date" required class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                  <label class="block text-xs font-semibold text-gray-700 mb-1">장소</label>
+                  <input type="text" id="input-session-location" class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                  <label class="block text-xs font-semibold text-gray-700 mb-1">주관 부서</label>
+                  <input type="text" id="input-session-organizer" class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+              </div>
+            </div>
+
+            <!-- 서명부 확인자 설정 -->
+            <div class="border-t border-gray-200 pt-4">
+              <h4 class="font-bold text-sm text-gray-900 flex items-center mb-2">
+                <i class="fas fa-user-check text-blue-600 mr-2"></i>출석부 하단 확인자 서식 설정
+              </h4>
+              <p class="text-xs text-gray-500 mb-3">출석부 맨 하단에 <code>확인자 : [부서명] [성명] (인)</code> 형태로 출력됩니다.</p>
+              
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-xs font-semibold text-gray-700 mb-1">확인자 부서</label>
+                  <input type="text" id="input-verifier-dept" placeholder="예: 교육연수팀 또는 교무기획부" class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+                <div>
+                  <label class="block text-xs font-semibold text-gray-700 mb-1">확인자 성명</label>
+                  <input type="text" id="input-verifier-name" placeholder="예: 김철수" class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                </div>
+              </div>
+            </div>
+
+            <!-- 결재란 설정 (기본 미표시, 추가 및 라인 수정 가능) -->
+            <div class="border-t border-gray-200 pt-4 space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h4 class="font-bold text-sm text-gray-900 flex items-center">
+                    <i class="fas fa-stamp text-indigo-600 mr-2"></i>상단 결재란 설정
+                  </h4>
+                  <p class="text-xs text-gray-500">필요 시 서명부 우측 상단에 결재란 도장 칸을 생성합니다.</p>
+                </div>
+                <label class="inline-flex items-center space-x-2 cursor-pointer bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-xl border border-gray-300">
+                  <input type="checkbox" id="check-show-approval" class="w-4 h-4 rounded text-blue-600">
+                  <span class="text-xs font-bold text-gray-800">결재란 추가하기</span>
+                </label>
+              </div>
+
+              <div id="approval-stages-container" class="opacity-50 pointer-events-none transition-all">
+                <label class="block text-xs font-semibold text-gray-700 mb-1">
+                  결재 라인 직함 (쉼표로 구분)
+                </label>
+                <input type="text" id="input-approval-stages" value="담당, 확인, 부서장" placeholder="예: 담당, 확인, 부서장 또는 담당, 교감, 교장" class="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                <p class="text-[11px] text-gray-500 mt-1">입력한 직함 개수만큼 서명부 우측 상단에 결재 칸이 자동으로 생성됩니다.</p>
+              </div>
+            </div>
+
+            <div class="text-right pt-2">
+              <button type="submit" class="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md transition-all">
+                설정 저장 및 서명부에 적용
+              </button>
+            </div>
+          </form>
+
+          <!-- 구글 스프레드시트 연동 설정 -->
+          <div class="border-t border-gray-200 pt-5 space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <h4 class="font-bold text-sm text-gray-900 flex items-center">
+                  <i class="fas fa-table text-emerald-600 mr-2"></i>Google Sheets (Apps Script) 실시간 연동
+                </h4>
+                <p class="text-xs text-gray-500">Apps Script 웹 앱 URL을 입력하면 구글 시트에 실시간으로 출석/서명이 기록됩니다.</p>
+              </div>
+              <a href="google-apps-script/README_GAS.md" target="_blank" class="text-xs text-blue-600 hover:underline">
+                <i class="fas fa-external-link-alt mr-1"></i>연동 가이드 보기
+              </a>
+            </div>
+
+            <div class="space-y-2">
+              <label class="block text-xs font-semibold text-gray-700">Apps Script 웹 앱 URL</label>
+              <div class="flex space-x-2">
+                <input type="url" id="input-gas-url" placeholder="https://script.google.com/macros/s/.../exec" class="flex-1 px-3 py-2 bg-gray-50 border border-gray-300 rounded-xl text-xs font-mono focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+                <button id="btn-save-gas-url" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm whitespace-nowrap">
+                  저장 및 연결 테스트
+                </button>
+              </div>
+              <div id="gas-test-result"></div>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- ==================== 모달 1: 현장 직접 참석자 등록 ==================== -->
+  <div id="modal-add-attendee" class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scale-up">
+      <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+        <h3 class="font-bold text-gray-900 text-base flex items-center">
+          <i class="fas fa-user-plus text-blue-600 mr-2"></i>현장 참석자 직접 등록
+        </h3>
+        <button id="btn-close-add-modal" class="text-gray-400 hover:text-gray-600 p-1 text-lg">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <form id="form-add-attendee" class="space-y-3 text-xs">
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">소속 (부서명)</label>
+          <input type="text" id="direct-dept" placeholder="예: 기획홍보팀, 3학년부" class="w-full px-3 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+        </div>
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">성명 <span class="text-red-500">*</span></label>
+          <input type="text" id="direct-name" required placeholder="성명을 입력하세요" class="w-full px-3 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+        </div>
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">직급 / 직위</label>
+          <input type="text" id="direct-position" placeholder="예: 교사, 과장, 주무관" class="w-full px-3 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+        </div>
+
+        <div class="pt-2 flex space-x-2">
+          <button type="button" onclick="document.getElementById('modal-add-attendee').classList.add('hidden')" class="w-1/2 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl text-xs">
+            취소
+          </button>
+          <button type="submit" class="w-1/2 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs shadow-md">
+            등록하고 바로 서명하기
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== 모달 2: 불참 사유 등록 (출장, 연가 등) ==================== -->
+  <div id="modal-absent-reason" class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-gray-100 pb-3">
+        <div>
+          <h3 class="font-bold text-gray-900 text-base flex items-center">
+            <i class="fas fa-calendar-times text-amber-600 mr-2"></i>불참 / 출석 사유 등록
+          </h3>
+          <p class="text-xs text-gray-500 mt-0.5" id="absent-target-name">홍길동 (기획팀)</p>
+        </div>
+        <button id="btn-close-absent-modal" class="text-gray-400 hover:text-gray-600 p-1 text-lg">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <form id="form-absent-reason" class="space-y-3 text-xs">
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">사유 구분</label>
+          <select id="select-absent-type" class="w-full px-3 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-sm font-semibold text-gray-800 outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="출장">출장</option>
+            <option value="연가">연가</option>
+            <option value="공가">공가</option>
+            <option value="병가">병가</option>
+            <option value="조퇴">조퇴</option>
+            <option value="불참">기타 불참</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-gray-700 mb-1">세부 내용 / 비고 (선택)</label>
+          <input type="text" id="input-absent-note" placeholder="예: 관외 출장, 오후 반차 등" class="w-full px-3 py-2.5 bg-gray-50 border border-gray-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none">
+        </div>
+
+        <div class="pt-2 flex space-x-2">
+          <button type="button" onclick="document.getElementById('modal-absent-reason').classList.add('hidden')" class="w-1/2 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl text-xs">
+            취소
+          </button>
+          <button type="submit" class="w-1/2 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs shadow-md">
+            사유 저장하기
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== 모달 3: 빔프로젝터 전체화면 QR코드 ==================== -->
+  <div id="modal-fullscreen-qr" class="fixed inset-0 z-50 bg-slate-900/95 backdrop-blur-md flex flex-col items-center justify-center p-6 hidden">
+    <button id="btn-close-qr-modal" class="absolute top-6 right-6 text-white/80 hover:text-white text-2xl p-2">
+      <i class="fas fa-times"></i>
+    </button>
+    <div class="text-center text-white space-y-4 max-w-lg">
+      <span class="inline-block px-3 py-1 bg-blue-500/30 text-blue-200 text-xs font-semibold rounded-full border border-blue-400/30">
+        스마트폰 출석 서명 안내
+      </span>
+      <h2 class="text-2xl sm:text-3xl font-black session-title-text leading-tight">
+        2026년도 직무 역량강화 연수
+      </h2>
+      <p class="text-sm text-gray-300">
+        스마트폰 카메라로 아래 QR코드를 비추면 즉시 서명할 수 있습니다.
+      </p>
+
+      <div class="bg-white p-6 rounded-3xl inline-block shadow-2xl my-2">
+        <div id="large-qr-code-container"></div>
+      </div>
+
+      <p class="text-xs text-gray-400">
+        명단에 본인 이름이 없는 경우 현장에서 직접 등록 후 서명 가능합니다.
+      </p>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="bg-white border-t border-gray-200 py-4 text-center text-xs text-gray-500 mt-auto">
+    <p>연수 전자 서명 및 출석 관리 시스템 • GitHub Pages & Google Sheets 지원</p>
+  </footer>
+
+  <!-- Application Scripts -->
+  <script src="js/pdf-parser.js"></script>
+  <script src="js/signature-pad.js"></script>
+  <script src="js/gas-sync.js"></script>
+  <script src="js/pdf-generator.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
