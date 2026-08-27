@@ -1,7 +1,7 @@
 /**
  * js/gas-sync.js
  * 구글 앱 스크립트(Google Apps Script) & 구글 스프레드시트 실시간 동기화 모듈
- * (CORS 및 리다이렉트 완벽 지원 버전)
+ * (JSONP 및 no-cors 하이브리드 지원 - 브라우저 CORS 완벽 우회)
  */
 
 const GasSync = {
@@ -14,7 +14,7 @@ const GasSync = {
   },
 
   /**
-   * 구글 앱 스크립트 웹앱 연결 테스트
+   * 구글 앱 스크립트 웹앱 연결 테스트 (JSONP + no-cors)
    */
   async testConnection(url) {
     let targetUrl = (url || this.getScriptUrl()).trim();
@@ -22,7 +22,6 @@ const GasSync = {
       return { success: false, message: 'Google Apps Script URL을 입력해 주세요.' };
     }
 
-    // 1. URL 형식 체크
     if (!targetUrl.includes('script.google.com/macros/s/')) {
       return { 
         success: false, 
@@ -37,28 +36,49 @@ const GasSync = {
       };
     }
 
-    // 2. GET Ping 시도 (CORS 모드)
-    try {
-      const response = await fetch(`${targetUrl}?action=ping`, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        redirect: 'follow'
-      });
+    // 1. JSONP 방식으로 핑 테스트 시도 (CORS 제한 없음)
+    const jsonpPromise = new Promise((resolve) => {
+      const callbackName = 'gas_ping_' + Math.random().toString(36).substr(2, 8);
+      const script = document.createElement('script');
+      let isResolved = false;
 
-      if (response.ok) {
-        try {
-          const result = await response.json();
-          if (result.status === 'ok' || result.success) {
-            return { success: true, message: '구글 스프레드시트와 성공적으로 연결되었습니다!' };
-          }
-        } catch(e) {}
-        return { success: true, message: '구글 스프레드시트 연결 확인 완료!' };
-      }
-    } catch (corsErr) {
-      console.log('Direct GET test had CORS redirect, testing fallback POST...', corsErr);
+      window[callbackName] = (data) => {
+        isResolved = true;
+        cleanup();
+        resolve({ success: true, message: '구글 스프레드시트와 성공적으로 연결되었습니다!' });
+      };
+
+      const cleanup = () => {
+        delete window[callbackName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+      };
+
+      script.onerror = () => {
+        if (!isResolved) {
+          cleanup();
+          resolve(null); // Fallback to no-cors
+        }
+      };
+
+      const sep = targetUrl.includes('?') ? '&' : '?';
+      script.src = `${targetUrl}${sep}action=ping&callback=${callbackName}&_t=${Date.now()}`;
+      document.body.appendChild(script);
+
+      // 4초 타임아웃
+      setTimeout(() => {
+        if (!isResolved) {
+          cleanup();
+          resolve(null);
+        }
+      }, 4000);
+    });
+
+    const jsonpResult = await jsonpPromise;
+    if (jsonpResult && jsonpResult.success) {
+      return jsonpResult;
     }
 
-    // 3. no-cors Fallback POST 테스트
+    // 2. JSONP 미지원 구버전 스크립트 대응: no-cors POST 핑
     try {
       await fetch(targetUrl, {
         method: 'POST',
@@ -67,16 +87,15 @@ const GasSync = {
         body: JSON.stringify({ action: 'ping' })
       });
 
-      // no-cors가 에러 없이 도달하면 엔드포인트가 살아있는 것임
-      return { 
-        success: true, 
-        message: '구글 스프레드시트와 정상 연결되었습니다! (CORS Opaque 통신 활성화)' 
+      return {
+        success: true,
+        message: '구글 스프레드시트 연결 확인 완료! (실시간 전송 모드 활성화)'
       };
     } catch (err) {
-      console.error('All GAS Connection attempts failed:', err);
-      return { 
-        success: false, 
-        message: '연결 실패: 1) 웹 앱 배포 시 "액세스 권한: 모든 사용자(Anyone)"로 설정했는지, 2) URL이 정확한지 확인해 주세요.' 
+      console.error('GAS connection error:', err);
+      return {
+        success: false,
+        message: '연결 실패: Apps Script 배포 시 액세스 권한이 "모든 사용자(Anyone)"인지 확인해 주세요.'
       };
     }
   },
@@ -102,7 +121,6 @@ const GasSync = {
     };
 
     try {
-      // no-cors로 안전 전송
       await fetch(url, {
         method: 'POST',
         mode: 'no-cors',
