@@ -1,6 +1,7 @@
 /**
  * js/app.js
- * 전자 서명 웹 애플리케이션 메인 컨트롤러 (사용자 수정사항 반영)
+ * 전자 서명 웹 애플리케이션 메인 컨트롤러
+ * (모바일-PC 구글 시트 실시간 양방향 동기화 완벽 지원)
  */
 
 const AppState = {
@@ -22,10 +23,11 @@ const AppState = {
   selectedAttendeeForSign: null,
   selectedAttendeeForAbsent: null,
   signaturePad: null,
-  currentView: 'participant' // 'participant' | 'admin'
+  currentView: 'participant', // 'participant' | 'admin'
+  isSyncing: false
 };
 
-// 초기 기본 명단 (개인정보 보호를 위해 빈 배열로 유지, 명단 파일 업로드 시에만 채워짐)
+// 초기 기본 명단 (빈 배열로 유지)
 const DEFAULT_ATTENDEES = [];
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -33,19 +35,41 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 const App = {
-  init() {
+  async init() {
+    // 1. URL 파라미터 처리 (QR코드의 gasUrl 자동 획득)
+    const urlParams = new URLSearchParams(window.location.search);
+    const gasParam = urlParams.get('gas');
+    if (gasParam) {
+      GasSync.setScriptUrl(decodeURIComponent(gasParam));
+    }
+    const sheetParam = urlParams.get('sheet');
+    if (sheetParam) {
+      GasSync.setSheetName(decodeURIComponent(sheetParam));
+    }
+
     this.loadFromStorage();
     this.setupSignaturePad();
     this.setupEventListeners();
     this.render();
 
-    // URL 파라미터 확인 (예: ?view=admin or ?sign=sessionId)
-    const urlParams = new URLSearchParams(window.location.search);
+    // 2. 구글 시트로부터 최신 명단 자동 동기화 (모바일/PC 공통)
+    if (GasSync.getScriptUrl()) {
+      await this.syncFromGoogleSheet(false);
+    }
+
+    // 3. 뷰 모드 결정
     if (urlParams.get('view') === 'admin') {
       this.switchView('admin');
     } else {
       this.switchView('participant');
     }
+
+    // 4. 주기적 상태 갱신 (15초마다 구글 시트 동기화)
+    setInterval(() => {
+      if (GasSync.getScriptUrl() && !AppState.selectedAttendeeForSign) {
+        this.syncFromGoogleSheet(false);
+      }
+    }, 15000);
   },
 
   loadFromStorage() {
@@ -56,31 +80,84 @@ const App = {
       try { 
         const parsed = JSON.parse(savedSession);
         AppState.session = Object.assign(AppState.session, parsed);
-        if (!AppState.session.verifierDept) AppState.session.verifierDept = AppState.session.organizer || '담당부서';
-        if (!AppState.session.verifierName) AppState.session.verifierName = '담당자';
-        if (AppState.session.showApprovalBox === undefined) AppState.session.showApprovalBox = false;
-        if (!AppState.session.approvalStages) AppState.session.approvalStages = ['담당', '확인', '부서장'];
       } catch(e){}
     }
     if (savedAttendees) {
       try { 
         const parsed = JSON.parse(savedAttendees);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           AppState.attendees = parsed;
-        } else {
-          AppState.attendees = [...DEFAULT_ATTENDEES];
         }
-      } catch(e){
-        AppState.attendees = [...DEFAULT_ATTENDEES];
-      }
-    } else {
-      AppState.attendees = [...DEFAULT_ATTENDEES];
+      } catch(e){}
     }
   },
 
   saveToStorage() {
     localStorage.setItem('eSign_session', JSON.stringify(AppState.session));
     localStorage.setItem('eSign_attendees', JSON.stringify(AppState.attendees));
+  },
+
+  /**
+   * 구글 시트로부터 실시간 명단 동기화
+   */
+  async syncFromGoogleSheet(showToast = true) {
+    if (AppState.isSyncing) return;
+    AppState.isSyncing = true;
+
+    try {
+      const liveAttendees = await GasSync.fetchLiveStatus();
+      if (liveAttendees && liveAttendees.length > 0) {
+        // 구글 시트 데이터로 로컬 상태 갱신
+        const merged = liveAttendees.map((la, idx) => {
+          const existing = AppState.attendees.find(a => a.name === la.name && a.department === la.department);
+          return {
+            id: existing ? existing.id : 'att_gas_' + idx,
+            department: la.department || '일반',
+            name: la.name,
+            position: la.position || '참석자',
+            status: la.status || '미서명',
+            isSigned: la.isSigned || (la.status === '출석' || la.status === '서명완료'),
+            note: la.note || '',
+            signatureData: existing ? existing.signatureData : null
+          };
+        });
+
+        AppState.attendees = merged;
+        this.saveToStorage();
+        this.render();
+        this.renderPdfPreview();
+
+        if (showToast) {
+          alert(`구글 시트로부터 ${merged.length}명의 최신 명단을 불러왔습니다.`);
+        }
+      }
+    } catch (err) {
+      console.warn('Sync from Google Sheet failed:', err);
+    } finally {
+      AppState.isSyncing = false;
+    }
+  },
+
+  /**
+   * 로컬 명단을 구글 시트로 강제 전송
+   */
+  async syncToGoogleSheet() {
+    if (!GasSync.getScriptUrl()) {
+      alert('먼저 구글 Apps Script URL을 설정해 주세요.');
+      return;
+    }
+
+    const btn = document.getElementById('btn-force-sync-gas');
+    if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>시트로 전송 중...';
+
+    const res = await GasSync.syncInitialRoster(AppState.session, AppState.attendees);
+    if (res.success) {
+      alert(`총 ${AppState.attendees.length}명의 명단이 구글 스프레드시트에 성공적으로 동기화되었습니다!`);
+    } else {
+      alert(`전송 중 오류: ${res.message || res.error}`);
+    }
+
+    if (btn) btn.innerHTML = '<i class="fas fa-cloud-upload-alt mr-1.5"></i>구글 시트로 명단 전체 보내기';
   },
 
   setupSignaturePad() {
@@ -182,7 +259,7 @@ const App = {
       });
     }
 
-    // 불참(출장/연가) 사유 모달 이벤트
+    // 불참(출장/연가/조퇴) 사유 모달 이벤트
     const modalAbsent = document.getElementById('modal-absent-reason');
     const btnCloseAbsentModal = document.getElementById('btn-close-absent-modal');
     const formAbsentReason = document.getElementById('form-absent-reason');
@@ -223,6 +300,7 @@ const App = {
         alert('연수 설정 및 서명부 양식이 저장되었습니다.');
         this.render();
         this.renderPdfPreview();
+        this.renderAdminQrCode();
       });
     }
 
@@ -279,12 +357,33 @@ const App = {
           testResultEl.className = 'text-sm mt-2 text-green-600 font-semibold';
           testResultEl.innerHTML = `<i class="fas fa-check-circle mr-1"></i>${res.message}`;
           this.updateGasStatusBadge(true);
+          this.renderAdminQrCode(); // QR코드에 gasUrl 반영
+
+          // 연결 즉시 현재 로컬 명단이 있으면 시트로 자동 전송
+          if (AppState.attendees.length > 0) {
+            GasSync.syncInitialRoster(AppState.session, AppState.attendees);
+          } else {
+            // 시트에 이미 데이터가 있다면 시트로부터 로드
+            this.syncFromGoogleSheet(false);
+          }
         } else {
           testResultEl.className = 'text-sm mt-2 text-amber-600';
           testResultEl.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i>${res.message}`;
           this.updateGasStatusBadge(false);
         }
       });
+    }
+
+    // 구글 시트로 강제 전송 버튼
+    const btnForceSyncGas = document.getElementById('btn-force-sync-gas');
+    if (btnForceSyncGas) {
+      btnForceSyncGas.addEventListener('click', () => this.syncToGoogleSheet());
+    }
+
+    // 구글 시트로부터 새로고침 버튼
+    const btnFetchFromGas = document.getElementById('btn-fetch-from-gas');
+    if (btnFetchFromGas) {
+      btnFetchFromGas.addEventListener('click', () => this.syncFromGoogleSheet(true));
     }
 
     // QR코드 전체화면 모달
@@ -400,6 +499,12 @@ const App = {
 
     this.saveToStorage();
     this.render();
+
+    // 구글 시트에 자동 동기화
+    if (GasSync.getScriptUrl()) {
+      GasSync.syncInitialRoster(AppState.session, AppState.attendees);
+    }
+
     alert(`총 ${AppState.attendees.length}명의 참석자 명단이 준비되었습니다.`);
   },
 
@@ -471,7 +576,6 @@ const App = {
     document.querySelectorAll('.session-date-text').forEach(el => el.textContent = AppState.session.date);
     document.querySelectorAll('.session-location-text').forEach(el => el.textContent = AppState.session.location);
 
-    // 폼 동기화
     if (document.getElementById('input-session-title')) {
       document.getElementById('input-session-title').value = AppState.session.title;
       document.getElementById('input-session-date').value = AppState.session.date;
@@ -593,8 +697,8 @@ const App = {
       listContainer.innerHTML = `
         <div class="col-span-full py-10 text-center text-gray-500 bg-white rounded-xl border border-dashed border-gray-300 p-6">
           <i class="fas fa-search text-3xl text-gray-400 mb-2"></i>
-          <p class="font-medium text-gray-700">검색 조건에 맞는 참석자가 없습니다.</p>
-          <p class="text-xs text-gray-500 mt-1 mb-4">명단에 이름이 없으신 경우 아래 버튼으로 직접 추가해 주세요.</p>
+          <p class="font-medium text-gray-700">등록된 참석자가 없거나 검색 결과가 없습니다.</p>
+          <p class="text-xs text-gray-500 mt-1 mb-4">명단에 이름이 없으신 경우 아래 버튼으로 직접 등록해 주세요.</p>
           <button onclick="document.getElementById('btn-open-add-attendee').click()" class="inline-flex items-center px-4 py-2 bg-blue-50 text-blue-700 font-semibold rounded-lg text-sm hover:bg-blue-100">
             <i class="fas fa-user-plus mr-1.5"></i> 내 이름 직접 등록하기
           </button>
@@ -666,8 +770,8 @@ const App = {
           </div>
           
           <div class="flex items-center space-x-2">
-            <button onclick="App.openAbsentModal('${att.id}')" class="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs rounded-lg font-medium transition-colors" title="출장/연가 등 불참 사유 입력">
-              출장/연가
+            <button onclick="App.openAbsentModal('${att.id}')" class="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs rounded-lg font-medium transition-colors" title="출장/연가/조퇴 사유 입력">
+              출장/연가/조퇴
             </button>
             <button onclick="App.startSigning('${att.id}')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg flex items-center space-x-1 shadow-sm">
               <span>서명</span>
@@ -724,7 +828,7 @@ const App = {
     document.getElementById('modal-absent-reason').classList.remove('hidden');
   },
 
-  handleAbsentSubmit() {
+  async handleAbsentSubmit() {
     if (!AppState.selectedAttendeeForAbsent) return;
 
     const type = document.getElementById('select-absent-type').value;
@@ -743,6 +847,9 @@ const App = {
 
     this.render();
     this.renderPdfPreview();
+
+    // 구글 시트에 사유 전송
+    GasSync.submitSignature(AppState.session.id, att);
     alert(`${att.name} 님의 사유(${type})가 등록되었습니다.`);
   },
 
@@ -763,13 +870,12 @@ const App = {
 
     this.saveToStorage();
 
-    // 완료 화면 표시
     document.getElementById('step-sign-canvas').classList.add('hidden');
     document.getElementById('step-sign-complete').classList.remove('hidden');
     document.getElementById('complete-user-name').textContent = `${att.name} (${att.department})`;
     document.getElementById('complete-user-time').textContent = '정상 서명 완료';
 
-    // 구글 스프레드시트 비동기 전송
+    // 구글 시트에 실시간 전송
     GasSync.submitSignature(AppState.session.id, att).then(res => {
       console.log('GAS Submission Result:', res);
     });
@@ -810,6 +916,11 @@ const App = {
     AppState.attendees.push(newAtt);
     this.saveToStorage();
 
+    // 구글 시트에 자동 등록
+    if (GasSync.getScriptUrl()) {
+      GasSync.submitSignature(AppState.session.id, newAtt);
+    }
+
     document.getElementById('modal-add-attendee').classList.add('hidden');
     document.getElementById('form-add-attendee').reset();
 
@@ -847,7 +958,7 @@ const App = {
     });
 
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7" class="text-center py-8 text-gray-400">해당 조건의 참석자가 없습니다.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center py-8 text-gray-400">등록된 참석자가 없습니다. [사전 명단 등록] 탭에서 PDF나 엑셀을 업로드해 주세요.</td></tr>`;
       return;
     }
 
@@ -861,7 +972,6 @@ const App = {
         signThumb = `<img src="${att.signatureData}" class="h-8 max-w-[80px] object-contain mx-auto bg-gray-50 border rounded p-0.5" />`;
       }
 
-      // 상태 선택 드롭다운 (관리자가 출석, 출장, 연가 등 즉시 변경 가능)
       const currentStatus = att.status || (att.isSigned ? '출석' : '미서명');
       const statusSelectHtml = `
         <select onchange="App.changeAttendeeStatus('${att.id}', this.value)" class="text-xs py-1 px-2 rounded-lg border border-gray-300 bg-white font-medium focus:ring-1 focus:ring-blue-500 outline-none">
@@ -899,13 +1009,10 @@ const App = {
     if (!att) return;
 
     att.status = newStatus;
-    if (newStatus === '출석') {
-      // 서명 상태 유지
-    } else if (newStatus === '미서명') {
+    if (newStatus === '미서명') {
       att.isSigned = false;
       att.signatureData = null;
-    } else {
-      // 출장, 연가, 공가, 병가 등
+    } else if (newStatus !== '출석') {
       att.isSigned = false;
       att.signatureData = null;
     }
@@ -913,6 +1020,9 @@ const App = {
     this.saveToStorage();
     this.render();
     this.renderPdfPreview();
+
+    // 구글 시트에 상태 동기화
+    GasSync.submitSignature(AppState.session.id, att);
   },
 
   deleteAttendee(id) {
@@ -921,10 +1031,29 @@ const App = {
     this.saveToStorage();
     this.render();
     this.renderPdfPreview();
+
+    // 구글 시트 갱신
+    if (GasSync.getScriptUrl()) {
+      GasSync.syncInitialRoster(AppState.session, AppState.attendees);
+    }
   },
 
   renderPdfPreview() {
     PdfGenerator.renderPreviewDocument(AppState.session, AppState.attendees);
+  },
+
+  getShareSignUrl() {
+    const base = window.location.href.split('?')[0];
+    const gasUrl = GasSync.getScriptUrl();
+    const sheetName = GasSync.getSheetName() || (AppState.session.title ? AppState.session.title.substring(0, 30) : '');
+    let url = `${base}?view=participant`;
+    if (gasUrl) {
+      url += `&gas=${encodeURIComponent(gasUrl)}`;
+    }
+    if (sheetName) {
+      url += `&sheet=${encodeURIComponent(sheetName)}`;
+    }
+    return url;
   },
 
   renderAdminQrCode() {
@@ -932,9 +1061,7 @@ const App = {
     const qrUrlText = document.getElementById('admin-qr-url-text');
     if (!qrContainer) return;
 
-    const currentUrl = window.location.href.split('?')[0];
-    const signUrl = `${currentUrl}?view=participant`;
-
+    const signUrl = this.getShareSignUrl();
     if (qrUrlText) qrUrlText.textContent = signUrl;
 
     qrContainer.innerHTML = '';
@@ -954,9 +1081,7 @@ const App = {
     const qrContainer = document.getElementById('large-qr-code-container');
     if (!qrContainer) return;
 
-    const currentUrl = window.location.href.split('?')[0];
-    const signUrl = `${currentUrl}?view=participant`;
-
+    const signUrl = this.getShareSignUrl();
     qrContainer.innerHTML = '';
     if (window.QRCode) {
       new QRCode(qrContainer, {
