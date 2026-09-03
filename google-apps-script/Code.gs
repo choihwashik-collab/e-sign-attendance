@@ -1,6 +1,6 @@
 /**
  * Google Apps Script - 연수 전자 서명 및 출석부 데이터베이스 API
- * (v5: 모바일↔PC 동기화 완벽 지원 - 시트 자동 검색 로직 개선)
+ * (v6: 연수 묶음 지원, 30일 자동삭제 트리거)
  */
 
 function doGet(e) {
@@ -14,7 +14,6 @@ function doGet(e) {
   }
 
   if (action === 'getStatus') {
-    // 시트 찾기: sheetName 파라미터 우선 → 없으면 데이터가 있는 출석 시트 자동 검색
     var sheet = findAttendanceSheet(ss, params.sheetName);
     
     if (!sheet) {
@@ -26,7 +25,7 @@ function doGet(e) {
 
     for (var i = 1; i < data.length; i++) {
       var row = data[i];
-      if (!row[0] && !row[3]) continue; // 연번과 이름 모두 없으면 스킵
+      if (!row[0] && !row[3]) continue;
       attendees.push({
         department: row[1] || '',
         position: row[2] || '',
@@ -57,7 +56,7 @@ function doPost(e) {
     if (action === 'initSession') {
       var session = payload.session;
       var attendees = payload.attendees || [];
-      var sheetName = session.title ? session.title.substring(0, 30) : '연수출석부';
+      var sheetName = payload.sheetName || (session.title ? session.title.substring(0, 30) : '연수출석부');
       
       var sheet = ss.getSheetByName(sheetName);
       if (!sheet) {
@@ -66,24 +65,18 @@ function doPost(e) {
         sheet.clear();
       }
 
-      // 1행: 헤더
-      var header = ['연번', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터'];
+      var header = ['연번', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '생성일'];
       sheet.appendRow(header);
       sheet.getRange(1, 1, 1, header.length).setBackground('#f3f4f6').setFontWeight('bold').setHorizontalAlignment('center');
 
-      // 참석자 데이터 채우기
+      var createdAt = new Date().toISOString();
       var rows = [];
       for (var i = 0; i < attendees.length; i++) {
         var a = attendees[i];
         var statusStr = a.status || (a.isSigned ? '서명완료' : '미서명');
         rows.push([
-          i + 1,
-          a.department || '',
-          a.position || '',
-          a.name || '',
-          statusStr,
-          a.note || '',
-          ''
+          i + 1, a.department || '', a.position || '', a.name || '',
+          statusStr, a.note || '', '', createdAt
         ]);
       }
 
@@ -95,42 +88,35 @@ function doPost(e) {
         sheet.autoResizeColumn(c);
       }
 
-      // 이 시트를 활성 시트로 설정 (getStatus에서 fallback으로 찾을 수 있도록)
       ss.setActiveSheet(sheet);
 
       return createJsonResponse({ 
-        success: true, 
-        message: '명단 초기화 완료', 
-        totalCount: attendees.length,
-        sheetName: sheetName
+        success: true, message: '명단 초기화 완료', 
+        totalCount: attendees.length, sheetName: sheetName
       });
     }
 
     if (action === 'submitSignature') {
       var attendee = payload.attendee;
       var requestedSheetName = payload.sheetName;
-      
-      // 시트 찾기: 요청된 시트명 → 출석 데이터 시트 자동 검색
       var sheet = findAttendanceSheet(ss, requestedSheetName);
       
       if (!sheet) {
-        // 시트가 없으면 새로 만들기 (최초 모바일 서명 시)
         var newSheetName = requestedSheetName || '연수출석부';
         sheet = ss.getSheetByName(newSheetName);
         if (!sheet) {
           sheet = ss.insertSheet(newSheetName);
-          var header = ['연번', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터'];
+          var header = ['연번', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '생성일'];
           sheet.appendRow(header);
           sheet.getRange(1, 1, 1, header.length).setBackground('#f3f4f6').setFontWeight('bold').setHorizontalAlignment('center');
         }
       }
       
       var data = sheet.getDataRange().getValues();
-
       var foundRow = -1;
       for (var r = 1; r < data.length; r++) {
         if (data[r][3] === attendee.name && (data[r][1] === attendee.department || !attendee.department)) {
-          foundRow = r + 1; // 1-indexed
+          foundRow = r + 1;
           break;
         }
       }
@@ -139,22 +125,17 @@ function doPost(e) {
 
       if (foundRow !== -1) {
         sheet.getRange(foundRow, 5).setValue(currentStatus);
-        if (attendee.note) {
-          sheet.getRange(foundRow, 6).setValue(attendee.note);
-        }
+        if (attendee.note) sheet.getRange(foundRow, 6).setValue(attendee.note);
         if (attendee.signatureData) {
           sheet.getRange(foundRow, 7).setValue(attendee.signatureData.substring(0, 500) + '...(서명데이터)');
         }
       } else {
-        var newRowIndex = sheet.getLastRow() + 1;
         sheet.appendRow([
-          newRowIndex - 1,
-          attendee.department || '현장참석',
-          attendee.position || '참석자',
-          attendee.name,
-          currentStatus,
-          attendee.note || '',
-          attendee.signatureData ? attendee.signatureData.substring(0, 500) + '...(서명데이터)' : ''
+          sheet.getLastRow(),
+          attendee.department || '현장참석', attendee.position || '참석자',
+          attendee.name, currentStatus, attendee.note || '',
+          attendee.signatureData ? attendee.signatureData.substring(0, 500) + '...(서명데이터)' : '',
+          new Date().toISOString()
         ]);
       }
 
@@ -168,43 +149,69 @@ function doPost(e) {
 }
 
 /**
- * 출석 데이터가 있는 시트를 자동으로 찾아 반환
- * 1) sheetName 파라미터로 직접 검색
- * 2) 모든 시트를 순회하며 헤더 패턴(연번, 소속, 직급, 성명) 매칭
- * 3) 마지막 시트(가장 최근 생성) fallback
+ * 30일 이상 된 출석 시트 자동 삭제
+ * [설치 방법] Apps Script 편집기 → 트리거 → + 트리거 추가:
+ *   함수: cleanupOldSheets / 이벤트 소스: 시간 기반 / 유형: 매일 타이머 / 시간: 새벽 1~2시
  */
+function cleanupOldSheets() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+  var cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 30);
+  var deletedCount = 0;
+
+  for (var i = sheets.length - 1; i >= 0; i--) {
+    var sheet = sheets[i];
+    if (sheet.getLastRow() < 2) continue;
+    
+    try {
+      var headerRow = sheet.getRange(1, 1, 1, 4).getValues()[0];
+      if (headerRow[0] !== '연번' || headerRow[3] !== '성명') continue;
+      
+      // 생성일 컬럼(H열)에서 날짜 확인
+      var createdAtCell = sheet.getRange(2, 8).getValue();
+      if (!createdAtCell) continue;
+      
+      var createdDate = new Date(createdAtCell);
+      if (isNaN(createdDate.getTime())) continue;
+      
+      if (createdDate < cutoffDate) {
+        var sheetName = sheet.getName();
+        ss.deleteSheet(sheet);
+        deletedCount++;
+        Logger.log('삭제됨: ' + sheetName + ' (생성일: ' + createdDate.toISOString() + ')');
+      }
+    } catch (e) {
+      Logger.log('시트 검사 오류: ' + e.toString());
+    }
+  }
+
+  Logger.log('자동 정리 완료: ' + deletedCount + '개 시트 삭제');
+}
+
 function findAttendanceSheet(ss, sheetName) {
-  // 1) 이름으로 직접 검색
   if (sheetName) {
     var directSheet = ss.getSheetByName(sheetName);
     if (directSheet) return directSheet;
   }
 
-  // 2) 헤더 패턴으로 자동 검색 (가장 최근 생성된 출석 시트)
   var allSheets = ss.getSheets();
   var attendanceSheets = [];
   
   for (var i = 0; i < allSheets.length; i++) {
     var s = allSheets[i];
-    if (s.getLastRow() < 2) continue; // 데이터 없는 시트 스킵
-    
+    if (s.getLastRow() < 2) continue;
     try {
       var headerRow = s.getRange(1, 1, 1, 4).getValues()[0];
-      // 헤더가 '연번', '소속(부서)', '직급', '성명' 패턴인지 확인
       if (headerRow[0] === '연번' && headerRow[3] === '성명') {
         attendanceSheets.push(s);
       }
-    } catch (e) {
-      // 빈 시트 등 오류 무시
-    }
+    } catch (e) {}
   }
 
   if (attendanceSheets.length > 0) {
-    // 가장 마지막 (최근 생성된) 출석 시트 반환
     return attendanceSheets[attendanceSheets.length - 1];
   }
-
-  // 3) 아무것도 못 찾으면 null
   return null;
 }
 
