@@ -16,7 +16,7 @@ const AppState = {
 const App = {
   syncInterval: null,
 
-  init: function() {
+  init: async function() {
     this.loadBundles();
     this.cleanupExpiredBundles();
     
@@ -32,22 +32,33 @@ const App = {
 
     this.setupEventListeners();
 
+    const gasInput = document.getElementById('input-gas-url');
+    if (gasInput && this.getGasUrl()) gasInput.value = this.getGasUrl();
+    this.updateGasStatusBadge(!!this.getGasUrl());
+
     // Parse URL params
     const urlParams = new URLSearchParams(window.location.search);
     const gasParam = urlParams.get('gas');
-    const sheetParam = urlParams.get('sheet');
     const bundleParam = urlParams.get('bundle');
     const viewParam = urlParams.get('view');
 
     if (gasParam && typeof GasSync !== 'undefined') GasSync.setScriptUrl(gasParam);
-    if (sheetParam && typeof GasSync !== 'undefined') GasSync.setSheetName(sheetParam);
     
     if (bundleParam) {
-      this.selectBundle(bundleParam);
-      if (viewParam) {
-         this.switchView(viewParam);
+      let bundle = AppState.bundles.find(b => b.id === bundleParam);
+      if (!bundle && gasParam && typeof GasSync !== 'undefined') {
+        bundle = await GasSync.fetchBundle(bundleParam);
+        if (bundle) {
+          AppState.bundles.push(bundle);
+          this.saveBundles();
+        }
+      }
+      if (bundle) {
+        this.selectBundle(bundleParam);
+        this.switchView(viewParam || 'participant');
       } else {
-         this.switchView('participant');
+        this.switchView('home');
+        alert('공유된 연수 명단을 불러오지 못했습니다. 관리자에게 링크와 Google Apps Script 연결 상태를 확인해 달라고 요청해 주세요.');
       }
     } else {
       this.switchView('home');
@@ -591,7 +602,11 @@ const App = {
     const previewArea = document.getElementById('pdf-preview-area');
     if (previewArea) {
       if (AppState.currentBundle.sessions.length > 0) {
-        PdfGenerator.renderPreviewDocument(AppState.currentBundle, AppState.currentBundle.sessions[0].id, previewArea);
+        PdfGenerator.renderPreviewDocument(
+          AppState.currentBundle,
+          AppState.currentBundle.attendees,
+          AppState.currentBundle.sessions[0]
+        );
       } else {
         previewArea.innerHTML = '<div class="text-center p-8 text-gray-500">연수가 없습니다. 설정에서 연수를 추가하세요.</div>';
       }
@@ -602,6 +617,12 @@ const App = {
     const container = document.getElementById('admin-qr-code-container');
     const urlText = document.getElementById('admin-qr-url-text');
     if (!container || !AppState.currentBundle) return;
+
+    // A phone has its own localStorage. Publish the complete bundle before
+    // showing its QR code so a first-time mobile visitor can restore the roster.
+    if (this.getGasUrl() && typeof GasSync !== 'undefined') {
+      GasSync.syncBundle(AppState.currentBundle).catch(err => console.error('QR data sync failed', err));
+    }
     
     container.innerHTML = '';
     const shareUrl = this.getShareSignUrl();
@@ -749,7 +770,7 @@ const App = {
 
     // Sync to GAS if connected
     if (this.getGasUrl() && typeof GasSync !== 'undefined') {
-       GasSync.submitSignature(AppState.currentBundle.id, attendee.id, signatureData, '출석');
+       GasSync.submitAttendee(AppState.currentBundle, attendee);
     }
 
     document.getElementById('step-sign-canvas').classList.add('hidden');
@@ -804,7 +825,7 @@ const App = {
     this.renderAdminOverview();
     
     if (this.getGasUrl() && typeof GasSync !== 'undefined') {
-      GasSync.syncInitialRoster(AppState.currentBundle.id, AppState.currentBundle.attendees);
+      GasSync.syncBundle(AppState.currentBundle);
     }
   },
 
@@ -839,7 +860,7 @@ const App = {
     this.renderParticipantNameList();
 
     if (this.getGasUrl() && typeof GasSync !== 'undefined') {
-      GasSync.submitSignature(AppState.currentBundle.id, attendee.id, null, type);
+      GasSync.submitAttendee(AppState.currentBundle, attendee);
     }
   },
 
@@ -858,7 +879,7 @@ const App = {
       this.renderParticipantNameList();
 
       if (this.getGasUrl() && typeof GasSync !== 'undefined') {
-        GasSync.submitSignature(AppState.currentBundle.id, attendee.id, attendee.signatureData, newStatus);
+        GasSync.submitAttendee(AppState.currentBundle, attendee);
       }
     }
   },
@@ -874,7 +895,7 @@ const App = {
     this.renderDepartmentFilter();
     
     if (this.getGasUrl() && typeof GasSync !== 'undefined') {
-      GasSync.syncInitialRoster(AppState.currentBundle.id, AppState.currentBundle.attendees);
+      GasSync.syncBundle(AppState.currentBundle);
     }
   },
 
@@ -984,7 +1005,7 @@ const App = {
     alert(`${mapped.length}명의 명단이 적용되었습니다.`);
 
     if (this.getGasUrl() && typeof GasSync !== 'undefined') {
-      GasSync.syncInitialRoster(AppState.currentBundle.id, AppState.currentBundle.attendees);
+      GasSync.syncBundle(AppState.currentBundle);
     }
   },
 
@@ -998,10 +1019,6 @@ const App = {
     if (this.getGasUrl()) {
       url.searchParams.set('gas', this.getGasUrl());
     }
-    if (typeof GasSync !== 'undefined' && GasSync.getSheetName()) {
-      url.searchParams.set('sheet', GasSync.getSheetName());
-    }
-    
     return url.toString();
   },
 
@@ -1009,35 +1026,19 @@ const App = {
   syncFromGoogleSheet: function(showToast = true) {
     if (!AppState.currentBundle || typeof GasSync === 'undefined' || !this.getGasUrl()) return;
     
-    GasSync.fetchLiveStatus(AppState.currentBundle.id)
-      .then(updates => {
-        if (!updates || updates.length === 0) return;
-        
-        let changed = false;
-        updates.forEach(u => {
-          const attendee = AppState.currentBundle.attendees.find(a => a.id === u.id);
-          if (attendee) {
-            if (u.status !== attendee.status || (u.signatureData && !attendee.signatureData)) {
-              attendee.status = u.status;
-              if (u.status === '출석') {
-                 attendee.isSigned = true;
-                 if (u.signatureData) attendee.signatureData = u.signatureData;
-              } else if (u.status === '미서명') {
-                 attendee.isSigned = false;
-              } else {
-                 attendee.isSigned = false;
-              }
-              changed = true;
-            }
-          }
-        });
-
-        if (changed) {
-          this.saveBundles();
-          this.renderAdminOverview(document.getElementById('admin-dept-filter').value);
-          this.renderParticipantNameList();
-          if (showToast) console.log('구글 시트에서 최신 상태를 동기화했습니다.');
-        }
+    GasSync.fetchBundle(AppState.currentBundle.id)
+      .then(remoteBundle => {
+        if (!remoteBundle) return;
+        const index = AppState.bundles.findIndex(b => b.id === remoteBundle.id);
+        if (index >= 0) AppState.bundles[index] = remoteBundle;
+        else AppState.bundles.push(remoteBundle);
+        AppState.currentBundle = remoteBundle;
+        this.saveBundles();
+        this.updateHeaderInfo();
+        this.renderDepartmentFilter();
+        this.renderAdminOverview(document.getElementById('admin-dept-filter')?.value || 'ALL');
+        this.renderParticipantView();
+        if (showToast) console.log('구글 시트에서 최신 명단과 출석 상태를 동기화했습니다.');
       })
       .catch(err => {
          console.error('Sync failed', err);
@@ -1046,8 +1047,8 @@ const App = {
 
   syncToGoogleSheet: function() {
      if (!AppState.currentBundle || typeof GasSync === 'undefined' || !this.getGasUrl()) return;
-     GasSync.syncInitialRoster(AppState.currentBundle.id, AppState.currentBundle.attendees)
-       .then(() => alert('구글 시트에 명단을 동기화했습니다.'))
+     GasSync.syncBundle(AppState.currentBundle)
+       .then(result => alert(result.success ? '구글 시트에 명단을 동기화했습니다.' : ('동기화 실패: ' + result.message)))
        .catch(e => alert('동기화 실패: ' + e));
   },
 
@@ -1246,7 +1247,7 @@ const App = {
     });
     document.getElementById('btn-export-excel')?.addEventListener('click', () => {
       if (typeof PdfGenerator !== 'undefined' && AppState.currentBundle) {
-        PdfGenerator.exportToExcel(AppState.currentBundle);
+        PdfGenerator.exportToExcel(AppState.currentBundle, AppState.currentBundle.attendees);
       }
     });
 
@@ -1255,9 +1256,12 @@ const App = {
       if (typeof GasSync !== 'undefined') {
         const url = document.getElementById('input-gas-url').value.trim();
         GasSync.setScriptUrl(url);
-        GasSync.testConnection().then(ok => {
-           document.getElementById('gas-test-result').textContent = ok ? '연결 성공' : '연결 실패';
-           this.updateGasStatusBadge(ok);
+        GasSync.testConnection().then(result => {
+           const resultEl = document.getElementById('gas-test-result');
+           resultEl.textContent = result.message;
+           resultEl.classList.remove('hidden');
+           this.updateGasStatusBadge(result.success);
+           if (result.success && AppState.currentBundle) GasSync.syncBundle(AppState.currentBundle);
         });
       }
     });

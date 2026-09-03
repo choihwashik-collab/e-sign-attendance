@@ -136,6 +136,7 @@ const ListParser = {
    * @returns {Array<{department: string, name: string, position: string}>}
    */
   parseTextLines(lines) {
+    if (typeof lines === 'string') lines = lines.split(/\r?\n/);
     const attendees = [];
     let currentDept = '기본부서';
 

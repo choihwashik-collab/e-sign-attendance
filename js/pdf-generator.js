@@ -20,11 +20,12 @@ const PdfGenerator = {
     return { text: '미서명', isSpecial: false };
   },
 
-  renderPreviewDocument(session, attendees, sessionTitle) {
+  renderPreviewDocument(session, attendees, selectedSession) {
     const container = document.getElementById('pdf-preview-area') || document.getElementById('print-document');
     if (!container) return;
 
-    const displayTitle = sessionTitle || session.title || (session.sessions && session.sessions[0] ? session.sessions[0].title : '연수 및 교육 참석자 서명부');
+    const activeSession = selectedSession && typeof selectedSession === 'object' ? selectedSession : null;
+    const displayTitle = (activeSession && activeSession.title) || selectedSession || session.title || (session.sessions && session.sessions[0] ? session.sessions[0].title : '연수 및 교육 참석자 서명부');
 
     const sortedAttendees = [...attendees].sort((a, b) => {
       if (a.department === b.department) return a.name.localeCompare(b.name, 'ko');
@@ -83,7 +84,7 @@ const PdfGenerator = {
     const verifierDept = session.verifierDept || session.organizer || '해당 부서';
     const verifierName = session.verifierName || '담당자';
     const verifierText = `확인자 : ${verifierDept} ${verifierName} (인)`;
-    const dateStr = session.date || (session.sessions && session.sessions[0] ? session.sessions[0].date : new Date().toLocaleDateString('ko-KR'));
+    const dateStr = (activeSession && activeSession.date) || session.date || (session.sessions && session.sessions[0] ? session.sessions[0].date : new Date().toLocaleDateString('ko-KR'));
 
     container.innerHTML = `
       <div class="a4-preview-paper" id="a4-target-paper">
@@ -176,7 +177,7 @@ const PdfGenerator = {
         downloadBtn.disabled = true;
         downloadBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>${i + 1}/${bundle.sessions.length} PDF 생성 중...`;
       }
-      this.renderPreviewDocument(bundle, bundle.attendees, sess.title);
+      this.renderPreviewDocument(bundle, bundle.attendees, sess);
       await new Promise(r => setTimeout(r, 300));
       const titleSafe = sess.title.replace(/[^\w가-힣]/g, '_');
       await this.downloadPdf(`${titleSafe}_출석서명부.pdf`);
