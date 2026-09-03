@@ -8,6 +8,9 @@ function doGet(e) {
     var params = e && e.parameter ? e.parameter : {};
     var action = params.action || 'ping';
     if (action === 'ping') return jsonResponse({ success: true, message: '구글 스프레드시트 연결 성공!' }, params.callback);
+    if (action === 'listBundles') {
+      return jsonResponse({ success: true, bundles: listBundles_() }, params.callback);
+    }
     if (action === 'getBundle' || action === 'getStatus') {
       var bundle = readBundle_(params.bundleId, params.sheetName);
       return jsonResponse(bundle ? { success: true, bundle: bundle, attendees: bundle.attendees } : { success: false, message: '연수 묶음을 찾을 수 없습니다.' }, params.callback);
@@ -33,6 +36,10 @@ function doPost(e) {
     if (payload.action === 'submitAttendee' || payload.action === 'submitSignature') {
       saveAttendee_(payload.bundleId || payload.sessionId, payload.bundle, payload.attendee);
       return jsonResponse({ success: true, message: '출석 상태를 저장했습니다.' });
+    }
+    if (payload.action === 'deleteBundle') {
+      deleteBundle_(payload.bundleId);
+      return jsonResponse({ success: true, message: '연수 묶음을 삭제했습니다.' });
     }
     return jsonResponse({ success: false, message: '알 수 없는 요청입니다.' });
   } catch (error) {
@@ -112,6 +119,33 @@ function readBundle_(bundleId, legacySheetName) {
   return { id: meta[0], name: meta[1], createdAt: dateString_(meta[2]), sessions: parseJson_(meta[3], []), location: meta[4] || '',
     organizer: meta[5] || '', verifierDept: meta[6] || '', verifierName: meta[7] || '', showApprovalBox: meta[8] === true || meta[8] === 'TRUE',
     approvalStages: parseJson_(meta[9], ['담당', '확인', '부서장']), attendees: attendees };
+}
+
+function listBundles_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var registry = getRegistry_(ss);
+  if (registry.getLastRow() < 2) return [];
+  var ids = registry.getRange(2, 1, registry.getLastRow() - 1, 1).getValues();
+  var bundles = [];
+  for (var i = 0; i < ids.length; i++) {
+    if (!ids[i][0]) continue;
+    var bundle = readBundle_(String(ids[i][0]));
+    if (bundle) bundles.push(bundle);
+  }
+  bundles.sort(function(a, b) { return new Date(b.createdAt) - new Date(a.createdAt); });
+  return bundles;
+}
+
+function deleteBundle_(bundleId) {
+  if (!bundleId) throw new Error('삭제할 묶음 ID가 없습니다.');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var registry = getRegistry_(ss);
+  var row = findRegistryRow_(registry, bundleId);
+  if (row < 0) return;
+  var sheetId = Number(registry.getRange(row, 11).getValue());
+  var sheet = ss.getSheetById(sheetId);
+  if (sheet && ss.getSheets().length > 1) ss.deleteSheet(sheet);
+  registry.deleteRow(row);
 }
 
 function readLegacyBundle_(sheet, bundleId) {
