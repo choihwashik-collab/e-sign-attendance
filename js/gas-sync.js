@@ -1,6 +1,7 @@
 /** Google Apps Script / Google Sheets synchronization client (v7). */
 const GasSync = {
-  getScriptUrl() { return localStorage.getItem('eSign_gasUrl') || ''; },
+  DEFAULT_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbxC4C0dhdK7T1LvJRdPNE6dyx7qi9glSMDP-BuLcd8liP5wLjFg2mIqPgMI8FdasAMR/exec',
+  getScriptUrl() { return localStorage.getItem('eSign_gasUrl') || this.DEFAULT_SCRIPT_URL; },
   setScriptUrl(url) {
     const value = (url || '').trim();
     if (value) localStorage.setItem('eSign_gasUrl', value);
@@ -35,6 +36,16 @@ const GasSync = {
     if (!url || !bundleId) return null;
     const data = await this._jsonpRequest(url, { action: 'getBundle', bundleId }, 10000);
     return data && data.success && data.bundle ? data.bundle : null;
+  },
+  async fetchBundles() {
+    const url = this.getScriptUrl();
+    if (!url) return [];
+    const data = await this._jsonpRequest(url, { action: 'listBundles' }, 10000);
+    return data && data.success && Array.isArray(data.bundles) ? data.bundles : [];
+  },
+  async deleteBundle(bundleId) {
+    if (!bundleId) return { success: false, message: '삭제할 묶음 ID가 없습니다.' };
+    return this._post({ action: 'deleteBundle', bundleId });
   },
   async fetchLiveStatus(bundleId) {
     const bundle = await this.fetchBundle(bundleId);

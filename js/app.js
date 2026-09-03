@@ -34,7 +34,12 @@ const App = {
 
     const gasInput = document.getElementById('input-gas-url');
     if (gasInput && this.getGasUrl()) gasInput.value = this.getGasUrl();
-    this.updateGasStatusBadge(!!this.getGasUrl());
+    if (this.getGasUrl() && typeof GasSync !== 'undefined') {
+      this.updateGasStatusBadge(null);
+      GasSync.testConnection().then(result => this.updateGasStatusBadge(result.success));
+    } else {
+      this.updateGasStatusBadge(false);
+    }
 
     // Parse URL params
     const urlParams = new URLSearchParams(window.location.search);
@@ -61,6 +66,22 @@ const App = {
         alert('공유된 연수 명단을 불러오지 못했습니다. 관리자에게 링크와 Google Apps Script 연결 상태를 확인해 달라고 요청해 주세요.');
       }
     } else {
+      if (this.getGasUrl() && typeof GasSync !== 'undefined') {
+        try {
+          const remoteBundles = await GasSync.fetchBundles();
+          const remoteIds = new Set(remoteBundles.map(bundle => bundle.id));
+          const localOnlyBundles = AppState.bundles.filter(bundle => !remoteIds.has(bundle.id));
+          remoteBundles.forEach(remote => {
+            const index = AppState.bundles.findIndex(local => local.id === remote.id);
+            if (index >= 0) AppState.bundles[index] = remote;
+            else AppState.bundles.push(remote);
+          });
+          if (remoteBundles.length) this.saveBundles();
+          localOnlyBundles.forEach(bundle => GasSync.syncBundle(bundle));
+        } catch (error) {
+          console.error('회의 목록 동기화 실패', error);
+        }
+      }
       this.switchView('home');
     }
 
@@ -159,10 +180,12 @@ const App = {
     AppState.bundles.push(newBundle);
     this.saveBundles();
     this.renderBundleList();
+    if (this.getGasUrl() && typeof GasSync !== 'undefined') GasSync.syncBundle(newBundle);
   },
 
   deleteBundle: function(bundleId) {
     if (confirm('이 묶음을 정말 삭제하시겠습니까? 관련 데이터가 모두 삭제됩니다.')) {
+      if (this.getGasUrl() && typeof GasSync !== 'undefined') GasSync.deleteBundle(bundleId);
       AppState.bundles = AppState.bundles.filter(b => b.id !== bundleId);
       this.saveBundles();
       if (AppState.currentBundle && AppState.currentBundle.id === bundleId) {
@@ -191,6 +214,7 @@ const App = {
       const sessId = 'sess_' + new Date().getTime() + '_' + Math.floor(Math.random()*1000);
       bundle.sessions.push({ id: sessId, title: title, date: date });
       this.saveBundles();
+      if (this.getGasUrl() && typeof GasSync !== 'undefined') GasSync.syncBundle(bundle);
       if (AppState.currentBundle && AppState.currentBundle.id === bundleId) {
         this.renderParticipantView();
         this.renderBundleSessionsInSettings();
@@ -203,6 +227,7 @@ const App = {
     if (bundle) {
       bundle.sessions = bundle.sessions.filter(s => s.id !== sessionId);
       this.saveBundles();
+      if (this.getGasUrl() && typeof GasSync !== 'undefined') GasSync.syncBundle(bundle);
       if (AppState.currentBundle && AppState.currentBundle.id === bundleId) {
         this.renderParticipantView();
         this.renderBundleSessionsInSettings();
@@ -690,6 +715,11 @@ const App = {
   updateGasStatusBadge: function(isConnected) {
     const badge = document.getElementById('gas-sync-badge');
     if (!badge) return;
+    if (isConnected === null) {
+      badge.textContent = 'GAS 확인 중';
+      badge.className = 'px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800';
+      return;
+    }
     if (isConnected) {
       badge.textContent = 'GAS 연결됨';
       badge.className = 'px-2 py-1 text-xs rounded-full bg-green-100 text-green-800';
