@@ -1,225 +1,200 @@
-/**
- * Google Apps Script - 연수 전자 서명 및 출석부 데이터베이스 API
- * (v6: 연수 묶음 지원, 30일 자동삭제 트리거)
- */
+/** Google Apps Script backend for E-Sign Attendance (v7). */
+var REGISTRY_SHEET = '_eSignBundles';
+var ATTENDANCE_HEADERS = ['참석자ID', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '서명시각'];
+var REGISTRY_HEADERS = ['묶음ID', '묶음명', '생성일', '연수목록JSON', '장소', '주관', '확인부서', '확인자', '결재란표시', '결재단계JSON', '출석시트ID'];
 
 function doGet(e) {
-  var params = e ? e.parameter : {};
-  var action = params.action || 'ping';
-  var callback = params.callback;
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  if (action === 'ping') {
-    return createJsonResponse({ status: 'ok', success: true, message: '구글 스프레드시트 연결 성공!' }, callback);
-  }
-
-  if (action === 'getStatus') {
-    var sheet = findAttendanceSheet(ss, params.sheetName);
-    
-    if (!sheet) {
-      return createJsonResponse({ status: 'ok', attendees: [], message: '출석 데이터가 있는 시트를 찾을 수 없습니다.' }, callback);
+  try {
+    var params = e && e.parameter ? e.parameter : {};
+    var action = params.action || 'ping';
+    if (action === 'ping') return jsonResponse({ success: true, message: '구글 스프레드시트 연결 성공!' }, params.callback);
+    if (action === 'getBundle' || action === 'getStatus') {
+      var bundle = readBundle_(params.bundleId, params.sheetName);
+      return jsonResponse(bundle ? { success: true, bundle: bundle, attendees: bundle.attendees } : { success: false, message: '연수 묶음을 찾을 수 없습니다.' }, params.callback);
     }
-
-    var data = sheet.getDataRange().getValues();
-    var attendees = [];
-
-    for (var i = 1; i < data.length; i++) {
-      var row = data[i];
-      if (!row[0] && !row[3]) continue;
-      attendees.push({
-        department: row[1] || '',
-        position: row[2] || '',
-        name: row[3] || '',
-        status: row[4] || '미서명',
-        isSigned: row[4] === '출석' || row[4] === '서명완료',
-        note: row[5] || ''
-      });
-    }
-    return createJsonResponse({ 
-      status: 'ok', 
-      attendees: attendees,
-      sheetName: sheet.getName(),
-      totalCount: attendees.length
-    }, callback);
+    return jsonResponse({ success: false, message: '알 수 없는 요청입니다.' }, params.callback);
+  } catch (error) {
+    return jsonResponse({ success: false, error: String(error) }, e && e.parameter && e.parameter.callback);
   }
-
-  return createJsonResponse({ status: 'unknown_action' }, callback);
 }
 
 function doPost(e) {
+  var lock = LockService.getDocumentLock();
   try {
-    var rawData = e.postData.contents;
-    var payload = JSON.parse(rawData);
-    var action = payload.action;
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-
-    if (action === 'initSession') {
-      var session = payload.session;
-      var attendees = payload.attendees || [];
-      var sheetName = payload.sheetName || (session.title ? session.title.substring(0, 30) : '연수출석부');
-      
-      var sheet = ss.getSheetByName(sheetName);
-      if (!sheet) {
-        sheet = ss.insertSheet(sheetName);
-      } else {
-        sheet.clear();
-      }
-
-      var header = ['연번', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '생성일'];
-      sheet.appendRow(header);
-      sheet.getRange(1, 1, 1, header.length).setBackground('#f3f4f6').setFontWeight('bold').setHorizontalAlignment('center');
-
-      var createdAt = new Date().toISOString();
-      var rows = [];
-      for (var i = 0; i < attendees.length; i++) {
-        var a = attendees[i];
-        var statusStr = a.status || (a.isSigned ? '서명완료' : '미서명');
-        rows.push([
-          i + 1, a.department || '', a.position || '', a.name || '',
-          statusStr, a.note || '', '', createdAt
-        ]);
-      }
-
-      if (rows.length > 0) {
-        sheet.getRange(2, 1, rows.length, header.length).setValues(rows);
-      }
-
-      for (var c = 1; c <= header.length; c++) {
-        sheet.autoResizeColumn(c);
-      }
-
-      ss.setActiveSheet(sheet);
-
-      return createJsonResponse({ 
-        success: true, message: '명단 초기화 완료', 
-        totalCount: attendees.length, sheetName: sheetName
-      });
+    lock.waitLock(30000);
+    var payload = JSON.parse(e.postData.contents || '{}');
+    if (payload.action === 'initBundle' || payload.action === 'initSession') {
+      var legacyBundle = payload.bundle || payload.session;
+      if (!legacyBundle) throw new Error('연수 묶음 정보가 없습니다.');
+      if (payload.attendees && !legacyBundle.attendees) legacyBundle.attendees = payload.attendees;
+      saveBundle_(legacyBundle);
+      return jsonResponse({ success: true, message: '연수 묶음과 명단을 저장했습니다.' });
     }
-
-    if (action === 'submitSignature') {
-      var attendee = payload.attendee;
-      var requestedSheetName = payload.sheetName;
-      var sheet = findAttendanceSheet(ss, requestedSheetName);
-      
-      if (!sheet) {
-        var newSheetName = requestedSheetName || '연수출석부';
-        sheet = ss.getSheetByName(newSheetName);
-        if (!sheet) {
-          sheet = ss.insertSheet(newSheetName);
-          var header = ['연번', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '생성일'];
-          sheet.appendRow(header);
-          sheet.getRange(1, 1, 1, header.length).setBackground('#f3f4f6').setFontWeight('bold').setHorizontalAlignment('center');
-        }
-      }
-      
-      var data = sheet.getDataRange().getValues();
-      var foundRow = -1;
-      for (var r = 1; r < data.length; r++) {
-        if (data[r][3] === attendee.name && (data[r][1] === attendee.department || !attendee.department)) {
-          foundRow = r + 1;
-          break;
-        }
-      }
-
-      var currentStatus = attendee.status || (attendee.isSigned ? '출석' : '미서명');
-
-      if (foundRow !== -1) {
-        sheet.getRange(foundRow, 5).setValue(currentStatus);
-        if (attendee.note) sheet.getRange(foundRow, 6).setValue(attendee.note);
-        if (attendee.signatureData) {
-          sheet.getRange(foundRow, 7).setValue(attendee.signatureData.substring(0, 500) + '...(서명데이터)');
-        }
-      } else {
-        sheet.appendRow([
-          sheet.getLastRow(),
-          attendee.department || '현장참석', attendee.position || '참석자',
-          attendee.name, currentStatus, attendee.note || '',
-          attendee.signatureData ? attendee.signatureData.substring(0, 500) + '...(서명데이터)' : '',
-          new Date().toISOString()
-        ]);
-      }
-
-      return createJsonResponse({ success: true, message: attendee.name + ' 님의 상태(' + currentStatus + ')가 기록되었습니다.' });
+    if (payload.action === 'submitAttendee' || payload.action === 'submitSignature') {
+      saveAttendee_(payload.bundleId || payload.sessionId, payload.bundle, payload.attendee);
+      return jsonResponse({ success: true, message: '출석 상태를 저장했습니다.' });
     }
-
-    return createJsonResponse({ success: false, message: '알 수 없는 요청입니다.' });
+    return jsonResponse({ success: false, message: '알 수 없는 요청입니다.' });
   } catch (error) {
-    return createJsonResponse({ success: false, error: error.toString() });
+    return jsonResponse({ success: false, error: String(error) });
+  } finally {
+    try { lock.releaseLock(); } catch (ignore) {}
   }
 }
 
-/**
- * 30일 이상 된 출석 시트 자동 삭제
- * [설치 방법] Apps Script 편집기 → 트리거 → + 트리거 추가:
- *   함수: cleanupOldSheets / 이벤트 소스: 시간 기반 / 유형: 매일 타이머 / 시간: 새벽 1~2시
- */
-function cleanupOldSheets() {
+function saveBundle_(bundle) {
+  if (!bundle || !bundle.id) throw new Error('묶음 ID가 없습니다.');
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheets = ss.getSheets();
-  var cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - 30);
-  var deletedCount = 0;
+  var registry = getRegistry_(ss);
+  var registryRow = findRegistryRow_(registry, bundle.id);
+  var sheet = registryRow ? ss.getSheetById(Number(registry.getRange(registryRow, 11).getValue())) : null;
+  if (!sheet) sheet = ss.insertSheet(makeSheetName_(bundle));
 
-  for (var i = sheets.length - 1; i >= 0; i--) {
-    var sheet = sheets[i];
-    if (sheet.getLastRow() < 2) continue;
-    
-    try {
-      var headerRow = sheet.getRange(1, 1, 1, 4).getValues()[0];
-      if (headerRow[0] !== '연번' || headerRow[3] !== '성명') continue;
-      
-      // 생성일 컬럼(H열)에서 날짜 확인
-      var createdAtCell = sheet.getRange(2, 8).getValue();
-      if (!createdAtCell) continue;
-      
-      var createdDate = new Date(createdAtCell);
-      if (isNaN(createdDate.getTime())) continue;
-      
-      if (createdDate < cutoffDate) {
-        var sheetName = sheet.getName();
-        ss.deleteSheet(sheet);
-        deletedCount++;
-        Logger.log('삭제됨: ' + sheetName + ' (생성일: ' + createdDate.toISOString() + ')');
-      }
-    } catch (e) {
-      Logger.log('시트 검사 오류: ' + e.toString());
+  sheet.clear();
+  sheet.getRange(1, 1, 1, ATTENDANCE_HEADERS.length).setValues([ATTENDANCE_HEADERS]).setFontWeight('bold').setBackground('#f3f4f6');
+  var attendees = bundle.attendees || [];
+  if (attendees.length) {
+    var rows = attendees.map(function(a) { return attendeeRow_(a); });
+    sheet.getRange(2, 1, rows.length, ATTENDANCE_HEADERS.length).setValues(rows);
+  }
+  sheet.setFrozenRows(1);
+  sheet.hideColumns(7);
+  upsertRegistry_(registry, registryRow, bundle, sheet.getSheetId());
+}
+
+function saveAttendee_(bundleId, bundleMetadata, attendee) {
+  if (!bundleId || !attendee) throw new Error('묶음 ID 또는 참석자 정보가 없습니다.');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var registry = getRegistry_(ss);
+  var registryRow = findRegistryRow_(registry, bundleId);
+  if (!registryRow) {
+    var initial = bundleMetadata || { id: bundleId, name: '연수 출석부', sessions: [] };
+    initial.id = bundleId;
+    initial.attendees = [attendee];
+    saveBundle_(initial);
+    return;
+  }
+  if (bundleMetadata) upsertRegistry_(registry, registryRow, bundleMetadata, registry.getRange(registryRow, 11).getValue());
+  var sheet = ss.getSheetById(Number(registry.getRange(registryRow, 11).getValue()));
+  if (!sheet) throw new Error('출석 시트를 찾을 수 없습니다.');
+  var values = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues() : [];
+  var targetRow = -1;
+  for (var i = 0; i < values.length; i++) {
+    if ((attendee.id && values[i][0] === attendee.id) || (!attendee.id && values[i][1] === attendee.department && values[i][3] === attendee.name)) {
+      targetRow = i + 2;
+      break;
     }
   }
-
-  Logger.log('자동 정리 완료: ' + deletedCount + '개 시트 삭제');
+  if (targetRow < 0) targetRow = sheet.getLastRow() + 1;
+  sheet.getRange(targetRow, 1, 1, ATTENDANCE_HEADERS.length).setValues([attendeeRow_(attendee)]);
 }
 
-function findAttendanceSheet(ss, sheetName) {
-  if (sheetName) {
-    var directSheet = ss.getSheetByName(sheetName);
-    if (directSheet) return directSheet;
+function readBundle_(bundleId, legacySheetName) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var registry = getRegistry_(ss);
+  var row = bundleId ? findRegistryRow_(registry, bundleId) : -1;
+  if (row < 0 && legacySheetName) {
+    var candidate = ss.getSheetByName(legacySheetName);
+    if (candidate) return readLegacyBundle_(candidate, bundleId);
   }
+  if (row < 0) return null;
+  var meta = registry.getRange(row, 1, 1, REGISTRY_HEADERS.length).getValues()[0];
+  var sheet = ss.getSheetById(Number(meta[10]));
+  var attendees = [];
+  if (sheet && sheet.getLastRow() > 1) {
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, ATTENDANCE_HEADERS.length).getValues();
+    attendees = data.filter(function(r) { return r[0] || r[3]; }).map(function(r) {
+      var status = r[4] || '미서명';
+      return { id: r[0] || newId_('att'), department: r[1] || '', position: r[2] || '', name: r[3] || '', status: status,
+        note: r[5] || '', signatureData: r[6] || null, signedAt: dateString_(r[7]), isSigned: status === '출석' || status === '서명완료' };
+    });
+  }
+  return { id: meta[0], name: meta[1], createdAt: dateString_(meta[2]), sessions: parseJson_(meta[3], []), location: meta[4] || '',
+    organizer: meta[5] || '', verifierDept: meta[6] || '', verifierName: meta[7] || '', showApprovalBox: meta[8] === true || meta[8] === 'TRUE',
+    approvalStages: parseJson_(meta[9], ['담당', '확인', '부서장']), attendees: attendees };
+}
 
-  var allSheets = ss.getSheets();
-  var attendanceSheets = [];
-  
-  for (var i = 0; i < allSheets.length; i++) {
-    var s = allSheets[i];
-    if (s.getLastRow() < 2) continue;
-    try {
-      var headerRow = s.getRange(1, 1, 1, 4).getValues()[0];
-      if (headerRow[0] === '연번' && headerRow[3] === '성명') {
-        attendanceSheets.push(s);
+function readLegacyBundle_(sheet, bundleId) {
+  var data = sheet.getDataRange().getValues();
+  var attendees = [];
+  for (var i = 1; i < data.length; i++) {
+    if (!data[i][3]) continue;
+    var status = data[i][4] || '미서명';
+    attendees.push({ id: newId_('att'), department: data[i][1] || '', position: data[i][2] || '', name: data[i][3], status: status,
+      note: data[i][5] || '', signatureData: null, signedAt: null, isSigned: status === '출석' || status === '서명완료' });
+  }
+  return { id: bundleId || newId_('bundle'), name: sheet.getName(), createdAt: new Date().toISOString(), sessions: [{ id: newId_('sess'), title: sheet.getName(), date: '' }], attendees: attendees };
+}
+
+function getRegistry_(ss) {
+  var sheet = ss.getSheetByName(REGISTRY_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(REGISTRY_SHEET);
+    sheet.getRange(1, 1, 1, REGISTRY_HEADERS.length).setValues([REGISTRY_HEADERS]).setFontWeight('bold').setBackground('#dbeafe');
+    sheet.setFrozenRows(1);
+    sheet.hideSheet();
+  }
+  return sheet;
+}
+
+function findRegistryRow_(sheet, bundleId) {
+  if (!bundleId || sheet.getLastRow() < 2) return -1;
+  var finder = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).createTextFinder(String(bundleId)).matchEntireCell(true).findNext();
+  return finder ? finder.getRow() : -1;
+}
+
+function upsertRegistry_(registry, row, bundle, sheetId) {
+  var values = [[bundle.id, bundle.name || '연수 출석부', bundle.createdAt || new Date().toISOString(), JSON.stringify(bundle.sessions || []),
+    bundle.location || '', bundle.organizer || '', bundle.verifierDept || '', bundle.verifierName || '', !!bundle.showApprovalBox,
+    JSON.stringify(bundle.approvalStages || ['담당', '확인', '부서장']), Number(sheetId)]];
+  registry.getRange(row > 0 ? row : registry.getLastRow() + 1, 1, 1, REGISTRY_HEADERS.length).setValues(values);
+}
+
+function attendeeRow_(a) {
+  var signature = a.signatureData || '';
+  if (signature.length > 49000) throw new Error(a.name + '님의 서명 데이터가 너무 큽니다.');
+  return [a.id || newId_('att'), a.department || '', a.position || '', a.name || '', a.status || (a.isSigned ? '출석' : '미서명'),
+    a.note || '', signature, a.signedAt || ''];
+}
+
+function makeSheetName_(bundle) {
+  var base = String(bundle.name || '연수출석부').replace(/[\\\/\?\*\[\]:]/g, '_').substring(0, 18);
+  var suffix = String(bundle.id).replace(/[^a-zA-Z0-9]/g, '').slice(-8);
+  return (base + '_' + suffix).substring(0, 30);
+}
+
+function cleanupOldSheets() {
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(30000);
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var registry = getRegistry_(ss);
+    if (registry.getLastRow() < 2) return;
+    var rows = registry.getRange(2, 1, registry.getLastRow() - 1, REGISTRY_HEADERS.length).getValues();
+    var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+    for (var i = rows.length - 1; i >= 0; i--) {
+      var created = new Date(rows[i][2]);
+      if (!isNaN(created.getTime()) && created < cutoff) {
+        var sheet = ss.getSheetById(Number(rows[i][10]));
+        if (sheet && ss.getSheets().length > 1) ss.deleteSheet(sheet);
+        registry.deleteRow(i + 2);
       }
-    } catch (e) {}
-  }
-
-  if (attendanceSheets.length > 0) {
-    return attendanceSheets[attendanceSheets.length - 1];
-  }
-  return null;
+    }
+  } finally { lock.releaseLock(); }
 }
 
-function createJsonResponse(obj, callback) {
-  if (callback) {
-    return ContentService.createTextOutput(callback + '(' + JSON.stringify(obj) + ')')
-      .setMimeType(ContentService.MimeType.JAVASCRIPT);
-  }
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+function setupCleanupTrigger() {
+  ScriptApp.getProjectTriggers().filter(function(t) { return t.getHandlerFunction() === 'cleanupOldSheets'; }).forEach(function(t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('cleanupOldSheets').timeBased().everyDays(1).atHour(2).create();
 }
+
+function parseJson_(value, fallback) { try { return JSON.parse(value || ''); } catch (e) { return fallback; } }
+function dateString_(value) { return value instanceof Date ? value.toISOString() : (value ? String(value) : null); }
+function newId_(prefix) { return prefix + '_' + new Date().getTime() + '_' + Math.floor(Math.random() * 100000); }
+function jsonResponse(obj, callback) {
+  var body = callback ? callback + '(' + JSON.stringify(obj) + ')' : JSON.stringify(obj);
+  return ContentService.createTextOutput(body).setMimeType(callback ? ContentService.MimeType.JAVASCRIPT : ContentService.MimeType.JSON);
+}
+
+// Compatibility alias used by older deployments.
+function createJsonResponse(obj, callback) { return jsonResponse(obj, callback); }
