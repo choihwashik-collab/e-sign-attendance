@@ -1,1099 +1,1273 @@
-/**
- * js/app.js
- * 전자 서명 웹 애플리케이션 메인 컨트롤러
- * (모바일-PC 구글 시트 실시간 양방향 동기화 완벽 지원)
- */
-
+/** js/app.js - 전자 서명 웹 애플리케이션 메인 컨트롤러 (v6: 연수 묶음 관리, 비밀번호, 자동삭제) */
 const AppState = {
-  session: {
-    id: 'session_' + Math.random().toString(36).substr(2, 9),
-    title: '2026년도 직무 역량강화 연수',
-    date: new Date().toISOString().split('T')[0],
-    location: '본관 대강당',
-    organizer: '교육연수팀',
-    verifierDept: '교육연수팀',
-    verifierName: '김철수',
-    showApprovalBox: false,
-    approvalStages: ['담당', '확인', '부서장']
-  },
-  attendees: [],
+  bundles: [],
+  currentBundle: null,
   selectedDepartment: 'ALL',
   searchQuery: '',
-  showUnsignedOnly: false,
   selectedAttendeeForSign: null,
   selectedAttendeeForAbsent: null,
   signaturePad: null,
-  currentView: 'participant', // 'participant' | 'admin'
-  isSyncing: false
+  currentView: 'home',
+  isAdminAuthenticated: false,
+  isSyncing: false,
+  tempBundleSessions: []
 };
 
-// 초기 기본 명단 (빈 배열로 유지)
-const DEFAULT_ATTENDEES = [];
-
-document.addEventListener('DOMContentLoaded', () => {
-  App.init();
-});
-
 const App = {
-  async init() {
-    // 1. URL 파라미터 처리 (QR코드의 gasUrl 자동 획득)
+  syncInterval: null,
+
+  init: function() {
+    this.loadBundles();
+    this.cleanupExpiredBundles();
+    
+    // Setup signature pad
+    const canvas = document.getElementById('signature-canvas');
+    if (canvas && typeof SmoothSignaturePad !== 'undefined') {
+      AppState.signaturePad = new SmoothSignaturePad(canvas, {
+        minWidth: 1.5,
+        maxWidth: 3.5,
+        penColor: '#000000'
+      });
+    }
+
+    this.setupEventListeners();
+
+    // Parse URL params
     const urlParams = new URLSearchParams(window.location.search);
     const gasParam = urlParams.get('gas');
-    if (gasParam) {
-      GasSync.setScriptUrl(decodeURIComponent(gasParam));
-    }
     const sheetParam = urlParams.get('sheet');
-    if (sheetParam) {
-      GasSync.setSheetName(decodeURIComponent(sheetParam));
-    }
+    const bundleParam = urlParams.get('bundle');
+    const viewParam = urlParams.get('view');
 
-    this.loadFromStorage();
-    this.setupSignaturePad();
-    this.setupEventListeners();
-    this.render();
-
-    // 2. 구글 시트로부터 최신 명단 자동 동기화 (모바일/PC 공통)
-    if (GasSync.getScriptUrl()) {
-      await this.syncFromGoogleSheet(false);
-    }
-
-    // 3. 뷰 모드 결정
-    if (urlParams.get('view') === 'admin') {
-      this.switchView('admin');
+    if (gasParam && typeof GasSync !== 'undefined') GasSync.setScriptUrl(gasParam);
+    if (sheetParam && typeof GasSync !== 'undefined') GasSync.setSheetName(sheetParam);
+    
+    if (bundleParam) {
+      this.selectBundle(bundleParam);
+      if (viewParam) {
+         this.switchView(viewParam);
+      } else {
+         this.switchView('participant');
+      }
     } else {
-      this.switchView('participant');
+      this.switchView('home');
     }
 
-    // 4. 주기적 상태 갱신 (15초마다 구글 시트 동기화)
-    setInterval(() => {
-      if (GasSync.getScriptUrl() && !AppState.selectedAttendeeForSign) {
+    if (this.getGasUrl() && AppState.currentBundle) {
+      this.startPeriodicSync();
+    }
+  },
+
+  getGasUrl: function() {
+    return typeof GasSync !== 'undefined' ? GasSync.getScriptUrl() : '';
+  },
+
+  startPeriodicSync: function() {
+    if (this.syncInterval) clearInterval(this.syncInterval);
+    this.syncInterval = setInterval(() => {
+      if (AppState.currentBundle && this.getGasUrl()) {
         this.syncFromGoogleSheet(false);
       }
     }, 15000);
   },
 
-  loadFromStorage() {
-    const savedSession = localStorage.getItem('eSign_session');
-    const savedAttendees = localStorage.getItem('eSign_attendees');
-
-    if (savedSession) {
-      try { 
-        const parsed = JSON.parse(savedSession);
-        AppState.session = Object.assign(AppState.session, parsed);
-      } catch(e){}
-    }
-    if (savedAttendees) {
-      try { 
-        const parsed = JSON.parse(savedAttendees);
-        if (Array.isArray(parsed)) {
-          AppState.attendees = parsed;
-        }
-      } catch(e){}
-    }
-  },
-
-  saveToStorage() {
-    localStorage.setItem('eSign_session', JSON.stringify(AppState.session));
-    localStorage.setItem('eSign_attendees', JSON.stringify(AppState.attendees));
-  },
-
-  /**
-   * 구글 시트로부터 실시간 명단 동기화
-   */
-  async syncFromGoogleSheet(showToast = true) {
-    if (AppState.isSyncing) return;
-    AppState.isSyncing = true;
-
+  // Storage functions
+  loadBundles: function() {
     try {
-      const liveAttendees = await GasSync.fetchLiveStatus();
-      if (liveAttendees && liveAttendees.length > 0) {
-        // 구글 시트 데이터로 로컬 상태 갱신
-        const merged = liveAttendees.map((la, idx) => {
-          const existing = AppState.attendees.find(a => a.name === la.name && a.department === la.department);
-          return {
-            id: existing ? existing.id : 'att_gas_' + idx,
-            department: la.department || '일반',
-            name: la.name,
-            position: la.position || '참석자',
-            status: la.status || '미서명',
-            isSigned: la.isSigned || (la.status === '출석' || la.status === '서명완료'),
-            note: la.note || '',
-            signatureData: existing ? existing.signatureData : null
-          };
-        });
-
-        AppState.attendees = merged;
-        this.saveToStorage();
-        this.render();
-        this.renderPdfPreview();
-
-        if (showToast) {
-          alert(`구글 시트로부터 ${merged.length}명의 최신 명단을 불러왔습니다.`);
-        }
+      const stored = localStorage.getItem('eSign_bundles');
+      if (stored) {
+        AppState.bundles = JSON.parse(stored);
+      } else {
+        AppState.bundles = [];
       }
-    } catch (err) {
-      console.warn('Sync from Google Sheet failed:', err);
-    } finally {
-      AppState.isSyncing = false;
+    } catch (e) {
+      console.error('Failed to load bundles', e);
+      AppState.bundles = [];
     }
   },
 
-  /**
-   * 로컬 명단을 구글 시트로 강제 전송
-   */
-  async syncToGoogleSheet() {
-    if (!GasSync.getScriptUrl()) {
-      alert('먼저 구글 Apps Script URL을 설정해 주세요.');
+  saveBundles: function() {
+    try {
+      localStorage.setItem('eSign_bundles', JSON.stringify(AppState.bundles));
+    } catch (e) {
+      console.error('Failed to save bundles', e);
+    }
+  },
+
+  getAdminPw: function() {
+    return localStorage.getItem('eSign_adminPw') || '2026';
+  },
+
+  getMasterPw: function() {
+    return localStorage.getItem('eSign_masterPw') || '9723';
+  },
+
+  setAdminPw: function(pw) {
+    localStorage.setItem('eSign_adminPw', pw);
+  },
+
+  setMasterPw: function(pw) {
+    localStorage.setItem('eSign_masterPw', pw);
+  },
+
+  cleanupExpiredBundles: function() {
+    const now = new Date().getTime();
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    
+    const initialCount = AppState.bundles.length;
+    AppState.bundles = AppState.bundles.filter(b => {
+      const createdAtMs = new Date(b.createdAt).getTime();
+      return (now - createdAtMs) <= thirtyDaysMs;
+    });
+
+    const removedCount = initialCount - AppState.bundles.length;
+    if (removedCount > 0) {
+      console.log(`Removed ${removedCount} expired bundles.`);
+      this.saveBundles();
+    }
+  },
+
+  // Bundle CRUD
+  createBundle: function(name, sessions) {
+    const timestamp = new Date().getTime();
+    const random = Math.floor(Math.random() * 10000);
+    const newBundle = {
+      id: 'bundle_' + timestamp + '_' + random,
+      name: name,
+      createdAt: new Date().toISOString(),
+      sessions: sessions,
+      attendees: [],
+      location: '',
+      organizer: '',
+      verifierDept: '',
+      verifierName: '',
+      showApprovalBox: false,
+      approvalStages: ['담당', '확인', '부서장']
+    };
+    
+    AppState.bundles.push(newBundle);
+    this.saveBundles();
+    this.renderBundleList();
+  },
+
+  deleteBundle: function(bundleId) {
+    if (confirm('이 묶음을 정말 삭제하시겠습니까? 관련 데이터가 모두 삭제됩니다.')) {
+      AppState.bundles = AppState.bundles.filter(b => b.id !== bundleId);
+      this.saveBundles();
+      if (AppState.currentBundle && AppState.currentBundle.id === bundleId) {
+        AppState.currentBundle = null;
+        this.switchView('home');
+      } else {
+        this.renderBundleList();
+      }
+    }
+  },
+
+  selectBundle: function(bundleId) {
+    const bundle = AppState.bundles.find(b => b.id === bundleId);
+    if (bundle) {
+      AppState.currentBundle = bundle;
+      this.updateHeaderInfo();
+      this.renderParticipantView();
+      this.renderAdminOverview();
+      this.renderBundleSessionsInSettings();
+    }
+  },
+
+  addSessionToBundle: function(bundleId, title, date) {
+    const bundle = AppState.bundles.find(b => b.id === bundleId);
+    if (bundle) {
+      const sessId = 'sess_' + new Date().getTime() + '_' + Math.floor(Math.random()*1000);
+      bundle.sessions.push({ id: sessId, title: title, date: date });
+      this.saveBundles();
+      if (AppState.currentBundle && AppState.currentBundle.id === bundleId) {
+        this.renderParticipantView();
+        this.renderBundleSessionsInSettings();
+      }
+    }
+  },
+
+  removeSessionFromBundle: function(bundleId, sessionId) {
+    const bundle = AppState.bundles.find(b => b.id === bundleId);
+    if (bundle) {
+      bundle.sessions = bundle.sessions.filter(s => s.id !== sessionId);
+      this.saveBundles();
+      if (AppState.currentBundle && AppState.currentBundle.id === bundleId) {
+        this.renderParticipantView();
+        this.renderBundleSessionsInSettings();
+      }
+    }
+  },
+
+  // View switching
+  switchView: function(viewName) {
+    if (viewName === 'admin' && !AppState.isAdminAuthenticated) {
+      this.showAdminPasswordModal();
       return;
     }
 
-    const btn = document.getElementById('btn-force-sync-gas');
-    if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>시트로 전송 중...';
-
-    const res = await GasSync.syncInitialRoster(AppState.session, AppState.attendees);
-    if (res.success) {
-      alert(`총 ${AppState.attendees.length}명의 명단이 구글 스프레드시트에 성공적으로 동기화되었습니다!`);
-    } else {
-      alert(`전송 중 오류: ${res.message || res.error}`);
-    }
-
-    if (btn) btn.innerHTML = '<i class="fas fa-cloud-upload-alt mr-1.5"></i>구글 시트로 명단 전체 보내기';
-  },
-
-  setupSignaturePad() {
-    const canvas = document.getElementById('signature-canvas');
-    if (canvas) {
-      AppState.signaturePad = new SmoothSignaturePad(canvas, {
-        strokeColor: '#0f172a',
-        minWidth: 1.8,
-        maxWidth: 4.0
-      });
-    }
-  },
-
-  setupEventListeners() {
-    // 뷰 전환 버튼 (헤더)
-    document.querySelectorAll('[data-switch-view]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const view = e.currentTarget.getAttribute('data-switch-view');
-        this.switchView(view);
-      });
+    AppState.currentView = viewName;
+    
+    const views = ['home', 'participant', 'admin'];
+    views.forEach(v => {
+      const el = document.getElementById('view-' + (v === 'home' ? 'bundle-list' : v));
+      if (el) el.classList.toggle('hidden', v !== viewName);
     });
 
-    // 관리자 하위 탭 전환
-    document.querySelectorAll('[data-admin-tab]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const tab = e.currentTarget.getAttribute('data-admin-tab');
-        this.switchAdminTab(tab);
-      });
+    const navBtns = ['home', 'participant', 'admin'];
+    navBtns.forEach(b => {
+      const el = document.getElementById('nav-btn-' + b);
+      if (el) el.classList.toggle('active', b === viewName);
     });
 
-    // 참여자 화면 - 부서 필터 변경
-    const deptSelect = document.getElementById('participant-dept-select');
-    if (deptSelect) {
-      deptSelect.addEventListener('change', (e) => {
-        AppState.selectedDepartment = e.target.value;
-        this.renderParticipantNameList();
-      });
-    }
-
-    // 참여자 화면 - 이름 검색
-    const nameSearch = document.getElementById('participant-name-search');
-    if (nameSearch) {
-      nameSearch.addEventListener('input', (e) => {
-        AppState.searchQuery = e.target.value.trim().toLowerCase();
-        this.renderParticipantNameList();
-      });
-    }
-
-    // 서명 패드 조작 버튼
-    const btnClearSign = document.getElementById('btn-clear-signature');
-    if (btnClearSign) {
-      btnClearSign.addEventListener('click', () => {
-        if (AppState.signaturePad) AppState.signaturePad.clear();
-      });
-    }
-
-    const btnUndoSign = document.getElementById('btn-undo-signature');
-    if (btnUndoSign) {
-      btnUndoSign.addEventListener('click', () => {
-        if (AppState.signaturePad) AppState.signaturePad.undo();
-      });
-    }
-
-    // 서명 제출 버튼
-    const btnSubmitSign = document.getElementById('btn-submit-signature');
-    if (btnSubmitSign) {
-      btnSubmitSign.addEventListener('click', () => this.handleSignatureSubmit());
-    }
-
-    // 서명 취소/다시 선택 버튼
-    const btnCancelSign = document.getElementById('btn-cancel-signature');
-    if (btnCancelSign) {
-      btnCancelSign.addEventListener('click', () => this.cancelSigning());
-    }
-
-    // 직접 참석자 추가 모달 열기/닫기
-    const btnOpenAddAttendee = document.getElementById('btn-open-add-attendee');
-    const modalAddAttendee = document.getElementById('modal-add-attendee');
-    const btnCloseAddModal = document.getElementById('btn-close-add-modal');
-    const formAddAttendee = document.getElementById('form-add-attendee');
-
-    if (btnOpenAddAttendee && modalAddAttendee) {
-      btnOpenAddAttendee.addEventListener('click', () => {
-        modalAddAttendee.classList.remove('hidden');
-        document.getElementById('direct-name').focus();
-      });
-    }
-
-    if (btnCloseAddModal && modalAddAttendee) {
-      btnCloseAddModal.addEventListener('click', () => {
-        modalAddAttendee.classList.add('hidden');
-      });
-    }
-
-    if (formAddAttendee) {
-      formAddAttendee.addEventListener('submit', (e) => {
-        e.preventDefault();
-        this.handleDirectAddAttendee();
-      });
-    }
-
-    // 불참(출장/연가/조퇴) 사유 모달 이벤트
-    const modalAbsent = document.getElementById('modal-absent-reason');
-    const btnCloseAbsentModal = document.getElementById('btn-close-absent-modal');
-    const formAbsentReason = document.getElementById('form-absent-reason');
-
-    if (btnCloseAbsentModal && modalAbsent) {
-      btnCloseAbsentModal.addEventListener('click', () => {
-        modalAbsent.classList.add('hidden');
-      });
-    }
-
-    if (formAbsentReason) {
-      formAbsentReason.addEventListener('submit', (e) => {
-        e.preventDefault();
-        this.handleAbsentSubmit();
-      });
-    }
-
-    // 파일 업로드 설정
-    this.setupFileUpload();
-
-    // 연수 기본정보 & 확인자 & 결재란 수정 폼
-    const sessionForm = document.getElementById('form-session-info');
-    if (sessionForm) {
-      sessionForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        AppState.session.title = document.getElementById('input-session-title').value.trim();
-        AppState.session.date = document.getElementById('input-session-date').value;
-        AppState.session.location = document.getElementById('input-session-location').value.trim();
-        AppState.session.organizer = document.getElementById('input-session-organizer').value.trim();
-        AppState.session.verifierDept = document.getElementById('input-verifier-dept').value.trim();
-        AppState.session.verifierName = document.getElementById('input-verifier-name').value.trim();
-        AppState.session.showApprovalBox = document.getElementById('check-show-approval').checked;
-        
-        const stagesText = document.getElementById('input-approval-stages').value.trim();
-        AppState.session.approvalStages = stagesText ? stagesText.split(',').map(s => s.trim()).filter(Boolean) : ['담당', '확인', '부서장'];
-
-        this.saveToStorage();
-        alert('연수 설정 및 서명부 양식이 저장되었습니다.');
-        this.render();
+    if (viewName === 'home') {
+      this.renderBundleList();
+    } else if (viewName === 'participant') {
+      if (AppState.currentBundle) {
+        this.renderParticipantView();
+      }
+    } else if (viewName === 'admin') {
+      if (AppState.currentBundle) {
+        this.renderAdminOverview();
         this.renderPdfPreview();
         this.renderAdminQrCode();
-      });
-    }
-
-    // 결재란 체크박스 토글 시 인풋 활성화
-    const checkShowApproval = document.getElementById('check-show-approval');
-    const approvalStagesContainer = document.getElementById('approval-stages-container');
-    if (checkShowApproval && approvalStagesContainer) {
-      checkShowApproval.addEventListener('change', (e) => {
-        if (e.target.checked) {
-          approvalStagesContainer.classList.remove('opacity-50', 'pointer-events-none');
-        } else {
-          approvalStagesContainer.classList.add('opacity-50', 'pointer-events-none');
-        }
-      });
-    }
-
-    // PDF 다운로드 및 인쇄 버튼
-    const btnDownloadPdf = document.getElementById('btn-download-pdf');
-    if (btnDownloadPdf) {
-      btnDownloadPdf.addEventListener('click', () => {
-        const titleSafe = AppState.session.title.replace(/[^\w가-힣]/g, '_');
-        PdfGenerator.downloadPdf(`${titleSafe}_출석서명부.pdf`);
-      });
-    }
-
-    const btnPrintDoc = document.getElementById('btn-print-doc');
-    if (btnPrintDoc) {
-      btnPrintDoc.addEventListener('click', () => {
-        window.print();
-      });
-    }
-
-    const btnExportExcel = document.getElementById('btn-export-excel');
-    if (btnExportExcel) {
-      btnExportExcel.addEventListener('click', () => {
-        const titleSafe = AppState.session.title.replace(/[^\w가-힣]/g, '_');
-        PdfGenerator.exportToExcel(AppState.session, AppState.attendees, `${titleSafe}_출석명단.xlsx`);
-      });
-    }
-
-    // 구글 앱 스크립트 연동 설정 저장 & 테스트
-    const btnSaveGasUrl = document.getElementById('btn-save-gas-url');
-    if (btnSaveGasUrl) {
-      btnSaveGasUrl.addEventListener('click', async () => {
-        const url = document.getElementById('input-gas-url').value.trim();
-        GasSync.setScriptUrl(url);
-        
-        const testResultEl = document.getElementById('gas-test-result');
-        testResultEl.className = 'text-sm mt-2 text-blue-600';
-        testResultEl.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>연결 확인 중...';
-        
-        const res = await GasSync.testConnection(url);
-        if (res.success) {
-          testResultEl.className = 'text-sm mt-2 text-green-600 font-semibold';
-          testResultEl.innerHTML = `<i class="fas fa-check-circle mr-1"></i>${res.message}`;
-          this.updateGasStatusBadge(true);
-          this.renderAdminQrCode(); // QR코드에 gasUrl 반영
-
-          // 연결 즉시 현재 로컬 명단이 있으면 시트로 자동 전송
-          if (AppState.attendees.length > 0) {
-            GasSync.syncInitialRoster(AppState.session, AppState.attendees);
-          } else {
-            // 시트에 이미 데이터가 있다면 시트로부터 로드
-            this.syncFromGoogleSheet(false);
-          }
-        } else {
-          testResultEl.className = 'text-sm mt-2 text-amber-600';
-          testResultEl.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i>${res.message}`;
-          this.updateGasStatusBadge(false);
-        }
-      });
-    }
-
-    // 구글 시트로 강제 전송 버튼
-    const btnForceSyncGas = document.getElementById('btn-force-sync-gas');
-    if (btnForceSyncGas) {
-      btnForceSyncGas.addEventListener('click', () => this.syncToGoogleSheet());
-    }
-
-    // 구글 시트로부터 새로고침 버튼
-    const btnFetchFromGas = document.getElementById('btn-fetch-from-gas');
-    if (btnFetchFromGas) {
-      btnFetchFromGas.addEventListener('click', () => this.syncFromGoogleSheet(true));
-    }
-
-    // QR코드 전체화면 모달
-    const btnOpenQrModal = document.getElementById('btn-open-fullscreen-qr');
-    const modalQr = document.getElementById('modal-fullscreen-qr');
-    const btnCloseQrModal = document.getElementById('btn-close-qr-modal');
-
-    if (btnOpenQrModal && modalQr) {
-      btnOpenQrModal.addEventListener('click', () => {
-        modalQr.classList.remove('hidden');
-        this.renderLargeQrCode();
-      });
-    }
-    if (btnCloseQrModal && modalQr) {
-      btnCloseQrModal.addEventListener('click', () => {
-        modalQr.classList.add('hidden');
-      });
-    }
-  },
-
-  setupFileUpload() {
-    const dropZone = document.getElementById('roster-drop-zone');
-    const fileInput = document.getElementById('roster-file-input');
-
-    if (!dropZone || !fileInput) return;
-
-    ['dragenter', 'dragover'].forEach(eventName => {
-      dropZone.addEventListener(eventName, (e) => {
-        e.preventDefault();
-        dropZone.classList.add('border-blue-500', 'bg-blue-50');
-      }, false);
-    });
-
-    ['dragleave', 'drop'].forEach(eventName => {
-      dropZone.addEventListener(eventName, (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('border-blue-500', 'bg-blue-50');
-      }, false);
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-      const files = e.dataTransfer.files;
-      if (files.length > 0) this.handleRosterFile(files[0]);
-    });
-
-    fileInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) this.handleRosterFile(e.target.files[0]);
-    });
-
-    // 텍스트 직접 붙여넣기 파싱 버튼
-    const btnParseText = document.getElementById('btn-parse-text-roster');
-    if (btnParseText) {
-      btnParseText.addEventListener('click', () => {
-        const text = document.getElementById('textarea-roster-paste').value;
-        if (!text.trim()) {
-          alert('붙여넣을 명단 텍스트를 입력해 주세요.');
-          return;
-        }
-        const lines = text.split('\n');
-        const parsed = ListParser.parseTextLines(lines);
-        if (parsed.length === 0) {
-          alert('인식 가능한 이름이나 부서 형식을 찾을 수 없습니다. 예시를 참고해 주세요.');
-          return;
-        }
-        this.appendOrReplaceAttendees(parsed);
-      });
-    }
-  },
-
-  async handleRosterFile(file) {
-    const statusEl = document.getElementById('file-upload-status');
-    if (statusEl) {
-      statusEl.innerHTML = `<i class="fas fa-spinner fa-spin text-blue-600 mr-2"></i><strong>${file.name}</strong> 파일 분석 중...`;
-    }
-
-    try {
-      let attendees = [];
-      if (file.name.endsWith('.pdf')) {
-        attendees = await ListParser.parsePdf(file);
-      } else if (file.name.match(/\.(xlsx|xls|csv)$/i)) {
-        attendees = await ListParser.parseExcel(file);
-      } else {
-        const text = await file.text();
-        attendees = ListParser.parseTextLines(text.split('\n'));
-      }
-
-      if (attendees.length === 0) {
-        if (statusEl) statusEl.innerHTML = `<span class="text-amber-600"><i class="fas fa-exclamation-circle mr-1"></i>명단을 추출하지 못했습니다. 형식을 확인해 주세요.</span>`;
-        return;
-      }
-
-      this.appendOrReplaceAttendees(attendees);
-      if (statusEl) {
-        statusEl.innerHTML = `<span class="text-green-600 font-semibold"><i class="fas fa-check-circle mr-1"></i><strong>${attendees.length}명</strong>의 명단이 성공적으로 등록되었습니다!</span>`;
-      }
-    } catch (err) {
-      console.error(err);
-      if (statusEl) {
-        statusEl.innerHTML = `<span class="text-red-600"><i class="fas fa-times-circle mr-1"></i>파일 파싱 오류: ${err.message}</span>`;
       }
     }
   },
 
-  appendOrReplaceAttendees(newAttendees) {
-    const isReplace = document.getElementById('radio-roster-replace')?.checked;
-    if (isReplace) {
-      AppState.attendees = newAttendees;
-    } else {
-      const existingKeys = new Set(AppState.attendees.map(a => `${a.department}_${a.name}`));
-      const filtered = newAttendees.filter(a => !existingKeys.has(`${a.department}_${a.name}`));
-      AppState.attendees = [...AppState.attendees, ...filtered];
-    }
-
-    this.saveToStorage();
-    this.render();
-
-    // 구글 시트에 자동 동기화
-    if (GasSync.getScriptUrl()) {
-      GasSync.syncInitialRoster(AppState.session, AppState.attendees);
-    }
-
-    alert(`총 ${AppState.attendees.length}명의 참석자 명단이 준비되었습니다.`);
-  },
-
-  switchView(viewName) {
-    AppState.currentView = viewName;
-    const viewParticipant = document.getElementById('view-participant');
-    const viewAdmin = document.getElementById('view-admin');
-    const navParticipantBtn = document.getElementById('nav-btn-participant');
-    const navAdminBtn = document.getElementById('nav-btn-admin');
-
-    if (viewName === 'admin') {
-      viewParticipant.classList.add('hidden');
-      viewAdmin.classList.remove('hidden');
-      navAdminBtn.classList.add('bg-blue-700', 'text-white');
-      navAdminBtn.classList.remove('text-blue-100');
-      navParticipantBtn.classList.remove('bg-blue-700', 'text-white');
-      navParticipantBtn.classList.add('text-blue-100');
-      this.renderAdminOverview();
-      this.renderPdfPreview();
-      this.renderAdminQrCode();
-    } else {
-      viewAdmin.classList.add('hidden');
-      viewParticipant.classList.remove('hidden');
-      navParticipantBtn.classList.add('bg-blue-700', 'text-white');
-      navParticipantBtn.classList.remove('text-blue-100');
-      navAdminBtn.classList.remove('bg-blue-700', 'text-white');
-      navAdminBtn.classList.add('text-blue-100');
-      this.renderParticipantView();
-    }
-  },
-
-  switchAdminTab(tabName) {
-    document.querySelectorAll('.admin-tab-btn').forEach(btn => {
-      if (btn.getAttribute('data-admin-tab') === tabName) {
-        btn.classList.add('border-blue-600', 'text-blue-600', 'font-bold');
-        btn.classList.remove('border-transparent', 'text-gray-500');
-      } else {
-        btn.classList.remove('border-blue-600', 'text-blue-600', 'font-bold');
-        btn.classList.add('border-transparent', 'text-gray-500');
-      }
+  switchAdminTab: function(tabName) {
+    const tabs = document.querySelectorAll('.admin-tab-btn');
+    tabs.forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.adminTab === tabName);
     });
 
-    document.querySelectorAll('.admin-tab-pane').forEach(pane => {
-      if (pane.id === `tab-pane-${tabName}`) {
-        pane.classList.remove('hidden');
-      } else {
-        pane.classList.add('hidden');
-      }
+    const panes = document.querySelectorAll('.tab-pane');
+    panes.forEach(pane => {
+      pane.classList.add('hidden');
     });
+
+    const activePane = document.getElementById('tab-pane-' + tabName);
+    if (activePane) activePane.classList.remove('hidden');
 
     if (tabName === 'document') {
       this.renderPdfPreview();
     } else if (tabName === 'qr') {
       this.renderAdminQrCode();
-    } else if (tabName === 'live') {
-      this.renderAdminOverview();
     }
   },
 
-  render() {
-    this.updateHeaderInfo();
-    this.renderDepartmentFilter();
-    this.renderParticipantView();
-    this.renderAdminOverview();
+  // Admin password
+  showAdminPasswordModal: function() {
+    const modal = document.getElementById('modal-admin-password');
+    const input = document.getElementById('input-admin-pw');
+    const error = document.getElementById('admin-pw-error');
+    if (modal) {
+      modal.classList.remove('hidden');
+      if (input) {
+        input.value = '';
+        input.focus();
+      }
+      if (error) error.classList.add('hidden');
+    }
   },
 
-  updateHeaderInfo() {
-    document.querySelectorAll('.session-title-text').forEach(el => el.textContent = AppState.session.title);
-    document.querySelectorAll('.session-date-text').forEach(el => el.textContent = AppState.session.date);
-    document.querySelectorAll('.session-location-text').forEach(el => el.textContent = AppState.session.location);
+  handleAdminPasswordSubmit: function() {
+    const input = document.getElementById('input-admin-pw');
+    const error = document.getElementById('admin-pw-error');
+    const pw = input ? input.value : '';
 
-    if (document.getElementById('input-session-title')) {
-      document.getElementById('input-session-title').value = AppState.session.title;
-      document.getElementById('input-session-date').value = AppState.session.date;
-      document.getElementById('input-session-location').value = AppState.session.location;
-      document.getElementById('input-session-organizer').value = AppState.session.organizer;
-      document.getElementById('input-verifier-dept').value = AppState.session.verifierDept || AppState.session.organizer;
-      document.getElementById('input-verifier-name').value = AppState.session.verifierName || '';
+    if (pw === this.getAdminPw() || pw === this.getMasterPw()) {
+      AppState.isAdminAuthenticated = true;
+      const modal = document.getElementById('modal-admin-password');
+      if (modal) modal.classList.add('hidden');
+      this.switchView('admin');
+    } else {
+      if (error) error.classList.remove('hidden');
+    }
+  },
+
+  handleChangeAdminPassword: function() {
+    const masterVerify = document.getElementById('input-master-pw-verify');
+    const newAdminPw = document.getElementById('input-new-admin-pw');
+    
+    if (!masterVerify || !newAdminPw) return;
+
+    if (masterVerify.value === this.getMasterPw()) {
+      if (newAdminPw.value.length < 4) {
+        alert('새 관리자 비밀번호는 4자리 이상이어야 합니다.');
+        return;
+      }
+      this.setAdminPw(newAdminPw.value);
+      alert('관리자 비밀번호가 변경되었습니다.');
+      masterVerify.value = '';
+      newAdminPw.value = '';
+    } else {
+      alert('마스터 비밀번호가 틀렸습니다.');
+    }
+  },
+
+  handleChangeMasterPassword: function() {
+    const currentMaster = document.getElementById('input-current-master-pw');
+    const newMaster = document.getElementById('input-new-master-pw');
+    
+    if (!currentMaster || !newMaster) return;
+
+    if (currentMaster.value === this.getMasterPw()) {
+       if (newMaster.value.length < 4) {
+        alert('새 마스터 비밀번호는 4자리 이상이어야 합니다.');
+        return;
+      }
+      this.setMasterPw(newMaster.value);
+      alert('마스터 비밀번호가 변경되었습니다.');
+      currentMaster.value = '';
+      newMaster.value = '';
+    } else {
+      alert('현재 마스터 비밀번호가 틀렸습니다.');
+    }
+  },
+
+  // Rendering
+  renderBundleList: function() {
+    const container = document.getElementById('bundle-cards-container');
+    if (!container) return;
+
+    container.innerHTML = '';
+    
+    if (AppState.bundles.length === 0) {
+      container.innerHTML = '<div class="p-8 text-center text-gray-500">생성된 연수 묶음이 없습니다.</div>';
+      return;
+    }
+
+    const now = new Date().getTime();
+    const twentyFiveDaysMs = 25 * 24 * 60 * 60 * 1000;
+
+    AppState.bundles.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)).forEach(bundle => {
+      const attendees = bundle.attendees || [];
+      const signedCount = attendees.filter(a => a.isSigned || (a.status && a.status !== '미서명')).length;
       
-      const checkApproval = document.getElementById('check-show-approval');
-      if (checkApproval) {
-        checkApproval.checked = !!AppState.session.showApprovalBox;
-        const container = document.getElementById('approval-stages-container');
-        if (container) {
-          if (AppState.session.showApprovalBox) {
-            container.classList.remove('opacity-50', 'pointer-events-none');
-          } else {
-            container.classList.add('opacity-50', 'pointer-events-none');
-          }
-        }
-      }
+      const createdAtMs = new Date(bundle.createdAt).getTime();
+      const isExpiringSoon = (now - createdAtMs) > twentyFiveDaysMs;
+      const warningBadge = isExpiringSoon ? '<span class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">삭제 임박</span>' : '';
 
-      const stagesInput = document.getElementById('input-approval-stages');
-      if (stagesInput) {
-        stagesInput.value = (AppState.session.approvalStages || ['담당', '확인', '부서장']).join(', ');
-      }
-    }
+      const sessionTitles = bundle.sessions.map(s => s.title).join(', ');
+      
+      const card = document.createElement('div');
+      card.className = 'bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col';
+      card.innerHTML = `
+        <div class="p-5 flex-grow">
+          <div class="flex justify-between items-start mb-2">
+            <h3 class="text-lg font-semibold text-gray-900">${bundle.name} ${warningBadge}</h3>
+          </div>
+          <p class="text-sm text-gray-500 mb-4 h-10 overflow-hidden text-ellipsis">${sessionTitles}</p>
+          <div class="text-sm text-gray-600 mb-2">
+            <span class="font-medium text-gray-900">연수 개수:</span> ${bundle.sessions.length}개
+          </div>
+          <div class="flex justify-between text-sm text-gray-600">
+            <span>서명/총원:</span>
+            <span class="font-medium">${signedCount} / ${attendees.length}명</span>
+          </div>
+        </div>
+        <div class="bg-gray-50 p-4 border-t border-gray-200 flex justify-end gap-2">
+          <button class="btn-open-bundle px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm" data-id="${bundle.id}">열기</button>
+          <button class="btn-manage-bundle px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm" data-id="${bundle.id}">관리</button>
+          <button class="btn-delete-bundle px-4 py-2 bg-red-100 text-red-600 rounded hover:bg-red-200 text-sm" data-id="${bundle.id}">삭제</button>
+        </div>
+      `;
+      container.appendChild(card);
+    });
 
-    const gasUrl = GasSync.getScriptUrl();
-    if (document.getElementById('input-gas-url')) {
-      document.getElementById('input-gas-url').value = gasUrl;
-    }
-    this.updateGasStatusBadge(!!gasUrl);
+    container.querySelectorAll('.btn-open-bundle').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        this.selectBundle(e.target.dataset.id);
+        this.switchView('participant');
+      });
+    });
+
+    container.querySelectorAll('.btn-manage-bundle').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        this.selectBundle(e.target.dataset.id);
+        this.switchView('admin');
+      });
+    });
+
+    container.querySelectorAll('.btn-delete-bundle').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        this.deleteBundle(e.target.dataset.id);
+      });
+    });
   },
 
-  updateGasStatusBadge(isConnected) {
+  renderParticipantView: function() {
+    if (!AppState.currentBundle) return;
+    
+    const infoEl = document.getElementById('participant-bundle-info');
+    if (infoEl) {
+      infoEl.textContent = AppState.currentBundle.name;
+    }
+
+    const sessionListEl = document.getElementById('participant-session-list');
+    if (sessionListEl) {
+      sessionListEl.innerHTML = '';
+      AppState.currentBundle.sessions.forEach(sess => {
+        const li = document.createElement('li');
+        li.className = 'text-sm text-gray-600';
+        li.textContent = `• ${sess.title} (${sess.date})`;
+        sessionListEl.appendChild(li);
+      });
+    }
+
+    this.renderDepartmentFilter();
+    this.renderParticipantNameList();
+  },
+
+  renderDepartmentFilter: function() {
+    if (!AppState.currentBundle) return;
+    const depts = new Set(AppState.currentBundle.attendees.map(a => a.department));
+    
+    // For participant view
+    const pSelect = document.getElementById('participant-dept-select');
+    if (pSelect) {
+      pSelect.innerHTML = '<option value="ALL">전체 부서</option>';
+      Array.from(depts).sort().forEach(dept => {
+        if (dept) {
+          const option = document.createElement('option');
+          option.value = dept;
+          option.textContent = dept;
+          pSelect.appendChild(option);
+        }
+      });
+      pSelect.value = AppState.selectedDepartment;
+    }
+
+    // For admin view
+    const aSelect = document.getElementById('admin-dept-filter');
+    if (aSelect) {
+      aSelect.innerHTML = '<option value="ALL">전체 부서</option>';
+      Array.from(depts).sort().forEach(dept => {
+        if (dept) {
+          const option = document.createElement('option');
+          option.value = dept;
+          option.textContent = dept;
+          aSelect.appendChild(option);
+        }
+      });
+      aSelect.value = AppState.selectedDepartment;
+    }
+  },
+
+  renderParticipantNameList: function() {
+    const listEl = document.getElementById('participant-name-list');
+    if (!listEl || !AppState.currentBundle) return;
+
+    listEl.innerHTML = '';
+    
+    let filtered = AppState.currentBundle.attendees;
+    if (AppState.selectedDepartment !== 'ALL') {
+      filtered = filtered.filter(a => a.department === AppState.selectedDepartment);
+    }
+    if (AppState.searchQuery) {
+      const q = AppState.searchQuery.toLowerCase();
+      filtered = filtered.filter(a => a.name.toLowerCase().includes(q) || a.department.toLowerCase().includes(q));
+    }
+
+    if (filtered.length === 0) {
+      listEl.innerHTML = '<div class="col-span-full text-center text-gray-500 py-4">해당하는 참석자가 없습니다.</div>';
+      return;
+    }
+
+    filtered.forEach(attendee => {
+      const btn = document.createElement('button');
+      btn.className = `p-4 rounded-lg border text-left flex flex-col justify-between transition-colors ${
+        attendee.isSigned ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200 hover:border-blue-500 hover:shadow-md'
+      }`;
+      
+      let statusHtml = '';
+      if (attendee.isSigned) {
+        statusHtml = `<span class="text-xs font-semibold text-green-600 bg-green-100 px-2 py-1 rounded-full">서명완료</span>`;
+      } else if (attendee.status && attendee.status !== '미서명') {
+        statusHtml = `<span class="text-xs font-semibold text-gray-600 bg-gray-200 px-2 py-1 rounded-full">${attendee.status}</span>`;
+      }
+
+      btn.innerHTML = `
+        <div class="flex justify-between items-start mb-2">
+          <span class="text-sm text-gray-500 font-medium">${attendee.department}</span>
+          ${statusHtml}
+        </div>
+        <div class="text-lg font-bold text-gray-900">${attendee.name}</div>
+      `;
+
+      if (!attendee.isSigned) {
+        btn.addEventListener('click', () => this.startSigning(attendee.id));
+      }
+      
+      listEl.appendChild(btn);
+    });
+  },
+
+  renderAdminOverview: function(deptFilter = 'ALL') {
+    if (!AppState.currentBundle) return;
+    
+    const attendees = AppState.currentBundle.attendees;
+    let filtered = attendees;
+    if (deptFilter !== 'ALL') {
+      filtered = attendees.filter(a => a.department === deptFilter);
+    }
+
+    const total = filtered.length;
+    const signed = filtered.filter(a => a.isSigned || (a.status && a.status !== '미서명')).length;
+    const unsigned = total - signed;
+    const rate = total > 0 ? Math.round((signed / total) * 100) : 0;
+
+    const totalEl = document.getElementById('stat-total-count');
+    const signedEl = document.getElementById('stat-signed-count');
+    const unsignedEl = document.getElementById('stat-unsigned-count');
+    const rateEl = document.getElementById('stat-sign-rate');
+    const barEl = document.getElementById('stat-progress-bar');
+
+    if (totalEl) totalEl.textContent = `${total}명`;
+    if (signedEl) signedEl.textContent = `${signed}명`;
+    if (unsignedEl) unsignedEl.textContent = `${unsigned}명`;
+    if (rateEl) rateEl.textContent = `${rate}%`;
+    if (barEl) barEl.style.width = `${rate}%`;
+
+    const tbody = document.getElementById('admin-attendee-table-body');
+    if (tbody) {
+      tbody.innerHTML = '';
+      filtered.forEach((attendee, index) => {
+        const tr = document.createElement('tr');
+        tr.className = attendee.isSigned ? 'bg-green-50' : 'hover:bg-gray-50';
+        
+        let statusBadge = '<span class="px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">미서명</span>';
+        if (attendee.isSigned) {
+          statusBadge = '<span class="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">서명완료</span>';
+        } else if (attendee.status && attendee.status !== '미서명') {
+          statusBadge = `<span class="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-full">${attendee.status}</span>`;
+        }
+
+        const signedAtStr = attendee.signedAt ? new Date(attendee.signedAt).toLocaleTimeString() : '-';
+
+        const statusSelect = `
+          <select class="admin-status-select text-sm border-gray-300 rounded-md" data-id="${attendee.id}">
+            <option value="미서명" ${attendee.status === '미서명' && !attendee.isSigned ? 'selected' : ''}>미서명</option>
+            <option value="출석" ${attendee.isSigned ? 'selected' : ''} ${attendee.isSigned ? 'disabled' : ''}>출석</option>
+            <option value="출장" ${attendee.status === '출장' ? 'selected' : ''}>출장</option>
+            <option value="연가" ${attendee.status === '연가' ? 'selected' : ''}>연가</option>
+            <option value="공가" ${attendee.status === '공가' ? 'selected' : ''}>공가</option>
+            <option value="병가" ${attendee.status === '병가' ? 'selected' : ''}>병가</option>
+            <option value="조퇴" ${attendee.status === '조퇴' ? 'selected' : ''}>조퇴</option>
+          </select>
+        `;
+
+        tr.innerHTML = `
+          <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">${index + 1}</td>
+          <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-900">${attendee.department}</td>
+          <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">${attendee.name}</td>
+          <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">${statusBadge}</td>
+          <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">${signedAtStr}</td>
+          <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">${statusSelect}</td>
+          <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+            <button class="btn-del-attendee text-red-600 hover:text-red-900" data-id="${attendee.id}">삭제</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      tbody.querySelectorAll('.admin-status-select').forEach(sel => {
+        sel.addEventListener('change', (e) => {
+          this.changeAttendeeStatus(e.target.dataset.id, e.target.value);
+        });
+      });
+
+      tbody.querySelectorAll('.btn-del-attendee').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          this.deleteAttendee(e.target.dataset.id);
+        });
+      });
+    }
+  },
+
+  renderPdfPreview: function() {
+    if (!AppState.currentBundle || typeof PdfGenerator === 'undefined') return;
+    const previewArea = document.getElementById('pdf-preview-area');
+    if (previewArea) {
+      if (AppState.currentBundle.sessions.length > 0) {
+        PdfGenerator.renderPreviewDocument(AppState.currentBundle, AppState.currentBundle.sessions[0].id, previewArea);
+      } else {
+        previewArea.innerHTML = '<div class="text-center p-8 text-gray-500">연수가 없습니다. 설정에서 연수를 추가하세요.</div>';
+      }
+    }
+  },
+
+  renderAdminQrCode: function() {
+    const container = document.getElementById('admin-qr-code-container');
+    const urlText = document.getElementById('admin-qr-url-text');
+    if (!container || !AppState.currentBundle) return;
+    
+    container.innerHTML = '';
+    const shareUrl = this.getShareSignUrl();
+    if (urlText) urlText.value = shareUrl;
+
+    if (typeof QRCode !== 'undefined') {
+      new QRCode(container, {
+        text: shareUrl,
+        width: 200,
+        height: 200,
+        colorDark : "#000000",
+        colorLight : "#ffffff",
+        correctLevel : QRCode.CorrectLevel.M
+      });
+    }
+  },
+
+  renderLargeQrCode: function() {
+    const container = document.getElementById('large-qr-code-container');
+    if (!container || !AppState.currentBundle) return;
+    
+    container.innerHTML = '';
+    const shareUrl = this.getShareSignUrl();
+
+    if (typeof QRCode !== 'undefined') {
+      new QRCode(container, {
+        text: shareUrl,
+        width: 400,
+        height: 400,
+        colorDark : "#000000",
+        colorLight : "#ffffff",
+        correctLevel : QRCode.CorrectLevel.M
+      });
+    }
+  },
+
+  updateHeaderInfo: function() {
+    if (!AppState.currentBundle) return;
+    const bundle = AppState.currentBundle;
+    
+    const loc = document.getElementById('input-session-location');
+    const org = document.getElementById('input-session-organizer');
+    const vDept = document.getElementById('input-verifier-dept');
+    const vName = document.getElementById('input-verifier-name');
+    const showApp = document.getElementById('check-show-approval');
+    const appStages = document.getElementById('input-approval-stages');
+
+    if(loc) loc.value = bundle.location || '';
+    if(org) org.value = bundle.organizer || '';
+    if(vDept) vDept.value = bundle.verifierDept || '';
+    if(vName) vName.value = bundle.verifierName || '';
+    if(showApp) showApp.checked = bundle.showApprovalBox || false;
+    if(appStages) appStages.value = bundle.approvalStages ? bundle.approvalStages.join(',') : '담당,확인,부서장';
+
+    const stageContainer = document.getElementById('approval-stages-container');
+    if(stageContainer) {
+      if (bundle.showApprovalBox) {
+        stageContainer.classList.remove('hidden');
+      } else {
+        stageContainer.classList.add('hidden');
+      }
+    }
+  },
+
+  updateGasStatusBadge: function(isConnected) {
     const badge = document.getElementById('gas-sync-badge');
     if (!badge) return;
     if (isConnected) {
-      badge.innerHTML = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800"><span class="w-1.5 h-1.5 mr-1.5 bg-emerald-500 rounded-full"></span>구글 시트 연동됨</span>`;
+      badge.textContent = 'GAS 연결됨';
+      badge.className = 'px-2 py-1 text-xs rounded-full bg-green-100 text-green-800';
     } else {
-      badge.innerHTML = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600"><span class="w-1.5 h-1.5 mr-1.5 bg-gray-400 rounded-full"></span>로컬 브라우저 모드</span>`;
+      badge.textContent = 'GAS 미연결';
+      badge.className = 'px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-800';
     }
   },
 
-  getDepartments() {
-    const depts = new Set(AppState.attendees.map(a => a.department || '일반'));
-    return Array.from(depts).filter(Boolean).sort();
-  },
-
-  renderDepartmentFilter() {
-    const depts = this.getDepartments();
-    const select = document.getElementById('participant-dept-select');
-    const adminSelect = document.getElementById('admin-dept-filter');
-
-    const renderOptions = (selectEl, defaultText = '전체 부서') => {
-      if (!selectEl) return;
-      const currentVal = selectEl.value;
-      selectEl.innerHTML = `<option value="ALL">${defaultText} (${AppState.attendees.length}명)</option>` +
-        depts.map(d => {
-          const count = AppState.attendees.filter(a => a.department === d).length;
-          return `<option value="${d}">${d} (${count}명)</option>`;
-        }).join('');
-      if (depts.includes(currentVal) || currentVal === 'ALL') {
-        selectEl.value = currentVal;
-      }
-    };
-
-    renderOptions(select, '전체 부서');
-    renderOptions(adminSelect, '전체 부서 보기');
-
-    if (adminSelect) {
-      adminSelect.onchange = (e) => {
-        this.renderAdminOverview(e.target.value);
-      };
-    }
-  },
-
-  /* ================== 참여자 서명 화면 로직 ================== */
-  renderParticipantView() {
-    this.renderParticipantNameList();
+  renderBundleSessionsInSettings: function() {
+    const container = document.getElementById('settings-session-list');
+    if (!container || !AppState.currentBundle) return;
+    container.innerHTML = '';
     
-    if (AppState.selectedAttendeeForSign) {
-      document.getElementById('step-select-person').classList.add('hidden');
-      document.getElementById('step-sign-canvas').classList.remove('hidden');
-      
-      const att = AppState.selectedAttendeeForSign;
-      document.getElementById('signing-person-name').textContent = att.name;
-      document.getElementById('signing-person-dept').textContent = `${att.department} · ${att.position || '참석자'}`;
-      
-      if (AppState.signaturePad) {
-        setTimeout(() => AppState.signaturePad.resizeCanvas(), 50);
-      }
-    } else {
-      document.getElementById('step-select-person').classList.remove('hidden');
-      document.getElementById('step-sign-canvas').classList.add('hidden');
-      document.getElementById('step-sign-complete').classList.add('hidden');
-    }
-  },
-
-  renderParticipantNameList() {
-    const listContainer = document.getElementById('participant-name-list');
-    if (!listContainer) return;
-
-    const currentDept = AppState.selectedDepartment;
-    const query = AppState.searchQuery;
-
-    let filtered = AppState.attendees.filter(a => {
-      const matchDept = currentDept === 'ALL' || a.department === currentDept;
-      const matchName = !query || a.name.toLowerCase().includes(query) || (a.department && a.department.toLowerCase().includes(query));
-      return matchDept && matchName;
+    AppState.currentBundle.sessions.forEach(sess => {
+      const li = document.createElement('li');
+      li.className = 'flex justify-between items-center py-2 border-b';
+      li.innerHTML = `
+        <div>
+          <span class="font-medium">${sess.title}</span> <span class="text-sm text-gray-500">(${sess.date})</span>
+        </div>
+        <button type="button" class="btn-del-session text-red-500 hover:text-red-700 text-sm" data-id="${sess.id}">삭제</button>
+      `;
+      container.appendChild(li);
     });
 
-    filtered.sort((a, b) => {
-      if (a.department === b.department) return a.name.localeCompare(b.name, 'ko');
-      return a.department.localeCompare(b.department, 'ko');
+    container.querySelectorAll('.btn-del-session').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        this.removeSessionFromBundle(AppState.currentBundle.id, e.target.dataset.id);
+      });
     });
-
-    if (filtered.length === 0) {
-      listContainer.innerHTML = `
-        <div class="col-span-full py-10 text-center text-gray-500 bg-white rounded-xl border border-dashed border-gray-300 p-6">
-          <i class="fas fa-search text-3xl text-gray-400 mb-2"></i>
-          <p class="font-medium text-gray-700">등록된 참석자가 없거나 검색 결과가 없습니다.</p>
-          <p class="text-xs text-gray-500 mt-1 mb-4">명단에 이름이 없으신 경우 아래 버튼으로 직접 등록해 주세요.</p>
-          <button onclick="document.getElementById('btn-open-add-attendee').click()" class="inline-flex items-center px-4 py-2 bg-blue-50 text-blue-700 font-semibold rounded-lg text-sm hover:bg-blue-100">
-            <i class="fas fa-user-plus mr-1.5"></i> 내 이름 직접 등록하기
-          </button>
-        </div>
-      `;
-      return;
-    }
-
-    listContainer.innerHTML = filtered.map(att => {
-      const isSpecialStatus = att.status && !['미서명', '출석', ''].includes(att.status);
-
-      if (isSpecialStatus) {
-        return `
-          <div class="bg-amber-50/70 border border-amber-200 rounded-xl p-4 flex items-center justify-between">
-            <div class="flex items-center space-x-3">
-              <div class="w-10 h-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-xs">
-                ${att.status}
-              </div>
-              <div>
-                <div class="flex items-center space-x-1.5">
-                  <span class="font-bold text-gray-800">${att.name}</span>
-                  <span class="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-600">${att.position || '참석자'}</span>
-                </div>
-                <div class="text-xs text-gray-500 mt-0.5">${att.department} · [${att.status}] 등록됨</div>
-              </div>
-            </div>
-            <button onclick="App.openAbsentModal('${att.id}')" class="text-xs text-amber-700 hover:text-amber-900 bg-white px-2.5 py-1 rounded-lg border border-amber-300">
-              사유변경
-            </button>
-          </div>
-        `;
-      }
-
-      if (att.isSigned) {
-        return `
-          <div class="bg-gray-50 border border-gray-200 rounded-xl p-4 flex items-center justify-between opacity-80">
-            <div class="flex items-center space-x-3">
-              <div class="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-sm">
-                <i class="fas fa-check"></i>
-              </div>
-              <div>
-                <div class="flex items-center space-x-1.5">
-                  <span class="font-bold text-gray-700">${att.name}</span>
-                  <span class="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-600">${att.position || '참석자'}</span>
-                </div>
-                <div class="text-xs text-gray-500 mt-0.5">${att.department} · 서명완료</div>
-              </div>
-            </div>
-            <span class="text-xs font-semibold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
-              완료됨
-            </span>
-          </div>
-        `;
-      }
-
-      return `
-        <div class="bg-white hover:border-blue-300 border border-gray-200 rounded-xl p-4 flex items-center justify-between shadow-sm transition-all">
-          <div class="flex items-center space-x-3 cursor-pointer flex-1" onclick="App.startSigning('${att.id}')">
-            <div class="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-base">
-              ${att.name.charAt(0)}
-            </div>
-            <div>
-              <div class="flex items-center space-x-1.5">
-                <span class="font-bold text-gray-900 text-base">${att.name}</span>
-                <span class="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 font-medium">${att.position || '참석자'}</span>
-              </div>
-              <div class="text-xs text-gray-500 mt-0.5">${att.department}</div>
-            </div>
-          </div>
-          
-          <div class="flex items-center space-x-2">
-            <button onclick="App.openAbsentModal('${att.id}')" class="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs rounded-lg font-medium transition-colors" title="출장/연가/조퇴 사유 입력">
-              출장/연가/조퇴
-            </button>
-            <button onclick="App.startSigning('${att.id}')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg flex items-center space-x-1 shadow-sm">
-              <span>서명</span>
-              <i class="fas fa-chevron-right text-[10px]"></i>
-            </button>
-          </div>
-        </div>
-      `;
-    }).join('');
   },
 
-  startSigning(attendeeId) {
-    const att = AppState.attendees.find(a => a.id === attendeeId);
-    if (!att) return;
+  // Signing flow
+  startSigning: function(attendeeId) {
+    const attendee = AppState.currentBundle.attendees.find(a => a.id === attendeeId);
+    if (!attendee) return;
 
-    if (att.isSigned) {
-      if (!confirm(`${att.name}님은 이미 서명이 완료되었습니다. 다시 서명하시겠습니까?`)) {
-        return;
-      }
-    }
-
-    AppState.selectedAttendeeForSign = att;
+    AppState.selectedAttendeeForSign = attendee;
+    
     document.getElementById('step-select-person').classList.add('hidden');
-    document.getElementById('step-sign-canvas').classList.remove('hidden');
     document.getElementById('step-sign-complete').classList.add('hidden');
+    document.getElementById('step-sign-canvas').classList.remove('hidden');
 
-    document.getElementById('signing-person-name').textContent = att.name;
-    document.getElementById('signing-person-dept').textContent = `${att.department} · ${att.position || '참석자'}`;
+    const nameEl = document.getElementById('signing-person-name');
+    const deptEl = document.getElementById('signing-person-dept');
+    if (nameEl) nameEl.textContent = attendee.name;
+    if (deptEl) deptEl.textContent = attendee.department;
 
     if (AppState.signaturePad) {
+      AppState.signaturePad.resizeCanvas();
       AppState.signaturePad.clear();
-      setTimeout(() => AppState.signaturePad.resizeCanvas(), 100);
     }
-
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   },
 
-  cancelSigning() {
+  cancelSigning: function() {
     AppState.selectedAttendeeForSign = null;
     document.getElementById('step-sign-canvas').classList.add('hidden');
     document.getElementById('step-select-person').classList.remove('hidden');
-    this.renderParticipantNameList();
   },
 
-  openAbsentModal(attendeeId) {
-    const att = AppState.attendees.find(a => a.id === attendeeId);
-    if (!att) return;
-
-    AppState.selectedAttendeeForAbsent = att;
-    document.getElementById('absent-target-name').textContent = `${att.name} (${att.department})`;
-    document.getElementById('select-absent-type').value = ['출장', '연가', '공가', '병가', '조퇴'].includes(att.status) ? att.status : '출장';
-    document.getElementById('input-absent-note').value = att.note || '';
-    
-    document.getElementById('modal-absent-reason').classList.remove('hidden');
-  },
-
-  async handleAbsentSubmit() {
-    if (!AppState.selectedAttendeeForAbsent) return;
-
-    const type = document.getElementById('select-absent-type').value;
-    const note = document.getElementById('input-absent-note').value.trim();
-
-    const att = AppState.selectedAttendeeForAbsent;
-    att.status = type;
-    att.note = note;
-    att.isSigned = false;
-    att.signatureData = null;
-
-    this.saveToStorage();
-
-    document.getElementById('modal-absent-reason').classList.add('hidden');
-    AppState.selectedAttendeeForAbsent = null;
-
-    this.render();
-    this.renderPdfPreview();
-
-    // 구글 시트에 사유 전송
-    GasSync.submitSignature(AppState.session.id, att);
-    alert(`${att.name} 님의 사유(${type})가 등록되었습니다.`);
-  },
-
-  async handleSignatureSubmit() {
-    if (!AppState.selectedAttendeeForSign) return;
-
+  handleSignatureSubmit: function() {
+    if (!AppState.selectedAttendeeForSign || !AppState.currentBundle) return;
     if (!AppState.signaturePad || AppState.signaturePad.isEmpty()) {
-      alert('서명란에 본인의 서명을 작성해 주세요.');
+      alert('서명을 입력해주세요.');
       return;
     }
 
+    const attendee = AppState.selectedAttendeeForSign;
     const signatureData = AppState.signaturePad.toDataURL();
-    const att = AppState.selectedAttendeeForSign;
-    att.isSigned = true;
-    att.status = '출석';
-    att.signatureData = signatureData;
-    att.signedAt = new Date().toISOString();
+    
+    attendee.isSigned = true;
+    attendee.status = '출석';
+    attendee.signatureData = signatureData;
+    attendee.signedAt = new Date().toISOString();
 
-    this.saveToStorage();
+    this.saveBundles();
+
+    // Sync to GAS if connected
+    if (this.getGasUrl() && typeof GasSync !== 'undefined') {
+       GasSync.submitSignature(AppState.currentBundle.id, attendee.id, signatureData, '출석');
+    }
 
     document.getElementById('step-sign-canvas').classList.add('hidden');
     document.getElementById('step-sign-complete').classList.remove('hidden');
-    document.getElementById('complete-user-name').textContent = `${att.name} (${att.department})`;
-    document.getElementById('complete-user-time').textContent = '정상 서명 완료';
-
-    // 구글 시트에 실시간 전송
-    GasSync.submitSignature(AppState.session.id, att).then(res => {
-      console.log('GAS Submission Result:', res);
-    });
+    
+    const compName = document.getElementById('complete-user-name');
+    const compTime = document.getElementById('complete-user-time');
+    if (compName) compName.textContent = attendee.name;
+    if (compTime) compTime.textContent = new Date().toLocaleTimeString();
 
     setTimeout(() => {
-      if (AppState.currentView === 'participant' && !AppState.selectedAttendeeForSign) {
-        document.getElementById('step-sign-complete').classList.add('hidden');
-        document.getElementById('step-select-person').classList.remove('hidden');
-        this.renderParticipantNameList();
-      }
-    }, 3000);
-
-    AppState.selectedAttendeeForSign = null;
+      document.getElementById('step-sign-complete').classList.add('hidden');
+      document.getElementById('step-select-person').classList.remove('hidden');
+      AppState.selectedAttendeeForSign = null;
+      this.renderParticipantNameList();
+      this.renderAdminOverview(AppState.selectedDepartment);
+    }, 2500);
   },
 
-  handleDirectAddAttendee() {
-    const dept = document.getElementById('direct-dept').value.trim() || '현장참석';
+  handleDirectAddAttendee: function(e) {
+    e.preventDefault();
+    if (!AppState.currentBundle) return;
+    
+    const dept = document.getElementById('direct-dept').value.trim();
     const name = document.getElementById('direct-name').value.trim();
-    const pos = document.getElementById('direct-position').value.trim() || '참석자';
-
-    if (!name) {
-      alert('이름을 입력해 주세요.');
+    const position = document.getElementById('direct-position').value.trim();
+    
+    if (!dept || !name) {
+      alert('부서와 이름을 입력해주세요.');
       return;
     }
 
-    const newAtt = {
-      id: 'att_' + Math.random().toString(36).substr(2, 9),
+    const newAttendee = {
+      id: 'att_' + new Date().getTime() + '_' + Math.floor(Math.random()*1000),
       department: dept,
       name: name,
-      position: pos,
+      position: position,
       isSigned: false,
       status: '미서명',
       signatureData: null,
       note: '',
-      isDirectAdded: true
+      signedAt: null
     };
 
-    AppState.attendees.push(newAtt);
-    this.saveToStorage();
-
-    // 구글 시트에 자동 등록
-    if (GasSync.getScriptUrl()) {
-      GasSync.submitSignature(AppState.session.id, newAtt);
-    }
-
-    document.getElementById('modal-add-attendee').classList.add('hidden');
+    AppState.currentBundle.attendees.push(newAttendee);
+    this.saveBundles();
+    
     document.getElementById('form-add-attendee').reset();
-
-    this.renderDepartmentFilter();
-    this.startSigning(newAtt.id);
+    document.getElementById('modal-add-attendee').classList.add('hidden');
+    
+    this.renderParticipantView();
+    this.renderAdminOverview();
+    
+    if (this.getGasUrl() && typeof GasSync !== 'undefined') {
+      GasSync.syncInitialRoster(AppState.currentBundle.id, AppState.currentBundle.attendees);
+    }
   },
 
-  /* ================== 관리자 화면 로직 ================== */
-  renderAdminOverview(deptFilter = 'ALL') {
-    const totalCount = AppState.attendees.length;
-    const signedCount = AppState.attendees.filter(a => a.isSigned).length;
-    const specialCount = AppState.attendees.filter(a => a.status && !['미서명', '출석', ''].includes(a.status)).length;
-    const unsignedCount = totalCount - signedCount - specialCount;
-    const signRate = totalCount > 0 ? Math.round(((signedCount + specialCount) / totalCount) * 100) : 0;
+  // Absent/status
+  openAbsentModal: function(attendeeId) {
+    const attendee = AppState.currentBundle.attendees.find(a => a.id === attendeeId);
+    if (!attendee) return;
+    AppState.selectedAttendeeForAbsent = attendee;
+    
+    document.getElementById('absent-target-name').textContent = attendee.name;
+    document.getElementById('modal-absent-reason').classList.remove('hidden');
+  },
 
-    const statTotalEl = document.getElementById('stat-total-count');
-    const statSignedEl = document.getElementById('stat-signed-count');
-    const statUnsignedEl = document.getElementById('stat-unsigned-count');
-    const statRateEl = document.getElementById('stat-sign-rate');
-    const statProgressEl = document.getElementById('stat-progress-bar');
+  handleAbsentSubmit: function(e) {
+    e.preventDefault();
+    if (!AppState.selectedAttendeeForAbsent || !AppState.currentBundle) return;
+    
+    const type = document.getElementById('select-absent-type').value;
+    const note = document.getElementById('input-absent-note').value;
+    
+    const attendee = AppState.selectedAttendeeForAbsent;
+    attendee.status = type;
+    attendee.note = note;
+    
+    this.saveBundles();
+    
+    document.getElementById('modal-absent-reason').classList.add('hidden');
+    document.getElementById('form-absent-reason').reset();
+    AppState.selectedAttendeeForAbsent = null;
+    
+    this.renderAdminOverview(document.getElementById('admin-dept-filter').value);
+    this.renderParticipantNameList();
 
-    if (statTotalEl) statTotalEl.textContent = `${totalCount}명`;
-    if (statSignedEl) statSignedEl.textContent = `${signedCount}명`;
-    if (statUnsignedEl) statUnsignedEl.textContent = `${unsignedCount}명`;
-    if (statRateEl) statRateEl.textContent = `${signRate}%`;
-    if (statProgressEl) statProgressEl.style.width = `${signRate}%`;
+    if (this.getGasUrl() && typeof GasSync !== 'undefined') {
+      GasSync.submitSignature(AppState.currentBundle.id, attendee.id, null, type);
+    }
+  },
 
-    const tbody = document.getElementById('admin-attendee-table-body');
-    if (!tbody) return;
+  changeAttendeeStatus: function(id, newStatus) {
+    if (!AppState.currentBundle) return;
+    const attendee = AppState.currentBundle.attendees.find(a => a.id === id);
+    if (attendee) {
+      if (newStatus === '미서명') {
+        attendee.isSigned = false;
+        attendee.signatureData = null;
+        attendee.signedAt = null;
+      }
+      attendee.status = newStatus;
+      this.saveBundles();
+      this.renderAdminOverview(document.getElementById('admin-dept-filter').value);
+      this.renderParticipantNameList();
 
-    let filtered = AppState.attendees.filter(a => {
-      if (deptFilter !== 'ALL' && a.department !== deptFilter) return false;
-      if (AppState.showUnsignedOnly && (a.isSigned || (a.status && a.status !== '미서명'))) return false;
-      return true;
-    });
+      if (this.getGasUrl() && typeof GasSync !== 'undefined') {
+        GasSync.submitSignature(AppState.currentBundle.id, attendee.id, attendee.signatureData, newStatus);
+      }
+    }
+  },
 
-    if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="8" class="text-center py-8 text-gray-400">등록된 참석자가 없습니다. [사전 명단 등록] 탭에서 PDF나 엑셀을 업로드해 주세요.</td></tr>`;
+  deleteAttendee: function(id) {
+    if (!confirm('이 참석자를 삭제하시겠습니까?')) return;
+    if (!AppState.currentBundle) return;
+    
+    AppState.currentBundle.attendees = AppState.currentBundle.attendees.filter(a => a.id !== id);
+    this.saveBundles();
+    this.renderAdminOverview(document.getElementById('admin-dept-filter').value);
+    this.renderParticipantNameList();
+    this.renderDepartmentFilter();
+    
+    if (this.getGasUrl() && typeof GasSync !== 'undefined') {
+      GasSync.syncInitialRoster(AppState.currentBundle.id, AppState.currentBundle.attendees);
+    }
+  },
+
+  // File upload
+  setupFileUpload: function() {
+    const dropZone = document.getElementById('roster-drop-zone');
+    const fileInput = document.getElementById('roster-file-input');
+    
+    if (dropZone && fileInput) {
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('border-blue-500', 'bg-blue-50');
+      });
+      dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+      });
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+        if (e.dataTransfer.files.length) {
+          this.handleRosterFile(e.dataTransfer.files[0]);
+        }
+      });
+      dropZone.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length) {
+          this.handleRosterFile(e.target.files[0]);
+        }
+      });
+    }
+
+    const btnParseText = document.getElementById('btn-parse-text-roster');
+    if (btnParseText) {
+      btnParseText.addEventListener('click', () => {
+        const text = document.getElementById('textarea-roster-paste').value;
+        if (!text) {
+          alert('텍스트를 입력해주세요.');
+          return;
+        }
+        if (typeof ListParser !== 'undefined') {
+           const result = ListParser.parseTextLines(text);
+           this.appendOrReplaceAttendees(result);
+           document.getElementById('textarea-roster-paste').value = '';
+        }
+      });
+    }
+  },
+
+  handleRosterFile: function(file) {
+    if (!file) return;
+    const status = document.getElementById('file-upload-status');
+    if (status) status.textContent = `${file.name} 파일 분석 중...`;
+    
+    if (typeof ListParser === 'undefined') {
+      if (status) status.textContent = 'Parser가 로드되지 않았습니다.';
       return;
     }
 
-    tbody.innerHTML = filtered.map((att, idx) => {
-      const isSpecial = att.status && !['미서명', '출석', ''].includes(att.status);
-      
-      let signThumb = `<span class="text-xs text-gray-400">-</span>`;
-      if (isSpecial) {
-        signThumb = `<span class="text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">${att.status}</span>`;
-      } else if (att.isSigned && att.signatureData) {
-        signThumb = `<img src="${att.signatureData}" class="h-8 max-w-[80px] object-contain mx-auto bg-gray-50 border rounded p-0.5" />`;
+    if (file.name.endsWith('.pdf')) {
+      ListParser.parsePdf(file).then(result => {
+        if (status) status.textContent = `${result.length}명 처리 완료`;
+        this.appendOrReplaceAttendees(result);
+      }).catch(err => {
+        if (status) status.textContent = 'PDF 처리 오류: ' + err.message;
+      });
+    } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+      ListParser.parseExcel(file).then(result => {
+        if (status) status.textContent = `${result.length}명 처리 완료`;
+        this.appendOrReplaceAttendees(result);
+      }).catch(err => {
+        if (status) status.textContent = 'Excel 처리 오류: ' + err.message;
+      });
+    } else {
+      if (status) status.textContent = '지원되지 않는 파일 형식입니다.';
+    }
+  },
+
+  appendOrReplaceAttendees: function(parsedAttendees) {
+    if (!AppState.currentBundle || !parsedAttendees || parsedAttendees.length === 0) return;
+    
+    const mode = document.querySelector('input[name="roster-mode"]:checked')?.value || 'append';
+    
+    const mapped = parsedAttendees.map(p => ({
+      id: 'att_' + new Date().getTime() + '_' + Math.floor(Math.random()*10000),
+      department: p.department || '미지정',
+      name: p.name,
+      position: p.position || '',
+      isSigned: false,
+      status: '미서명',
+      signatureData: null,
+      note: '',
+      signedAt: null
+    }));
+
+    if (mode === 'replace') {
+      AppState.currentBundle.attendees = mapped;
+    } else {
+      AppState.currentBundle.attendees = AppState.currentBundle.attendees.concat(mapped);
+    }
+
+    this.saveBundles();
+    this.renderAdminOverview();
+    this.renderParticipantNameList();
+    this.renderDepartmentFilter();
+    
+    alert(`${mapped.length}명의 명단이 적용되었습니다.`);
+
+    if (this.getGasUrl() && typeof GasSync !== 'undefined') {
+      GasSync.syncInitialRoster(AppState.currentBundle.id, AppState.currentBundle.attendees);
+    }
+  },
+
+  // QR & sharing
+  getShareSignUrl: function() {
+    if (!AppState.currentBundle) return window.location.href;
+    const url = new URL(window.location.href);
+    url.searchParams.set('bundle', AppState.currentBundle.id);
+    url.searchParams.set('view', 'participant');
+    
+    if (this.getGasUrl()) {
+      url.searchParams.set('gas', this.getGasUrl());
+    }
+    if (typeof GasSync !== 'undefined' && GasSync.getSheetName()) {
+      url.searchParams.set('sheet', GasSync.getSheetName());
+    }
+    
+    return url.toString();
+  },
+
+  // Google Sheets sync
+  syncFromGoogleSheet: function(showToast = true) {
+    if (!AppState.currentBundle || typeof GasSync === 'undefined' || !this.getGasUrl()) return;
+    
+    GasSync.fetchLiveStatus(AppState.currentBundle.id)
+      .then(updates => {
+        if (!updates || updates.length === 0) return;
+        
+        let changed = false;
+        updates.forEach(u => {
+          const attendee = AppState.currentBundle.attendees.find(a => a.id === u.id);
+          if (attendee) {
+            if (u.status !== attendee.status || (u.signatureData && !attendee.signatureData)) {
+              attendee.status = u.status;
+              if (u.status === '출석') {
+                 attendee.isSigned = true;
+                 if (u.signatureData) attendee.signatureData = u.signatureData;
+              } else if (u.status === '미서명') {
+                 attendee.isSigned = false;
+              } else {
+                 attendee.isSigned = false;
+              }
+              changed = true;
+            }
+          }
+        });
+
+        if (changed) {
+          this.saveBundles();
+          this.renderAdminOverview(document.getElementById('admin-dept-filter').value);
+          this.renderParticipantNameList();
+          if (showToast) console.log('구글 시트에서 최신 상태를 동기화했습니다.');
+        }
+      })
+      .catch(err => {
+         console.error('Sync failed', err);
+      });
+  },
+
+  syncToGoogleSheet: function() {
+     if (!AppState.currentBundle || typeof GasSync === 'undefined' || !this.getGasUrl()) return;
+     GasSync.syncInitialRoster(AppState.currentBundle.id, AppState.currentBundle.attendees)
+       .then(() => alert('구글 시트에 명단을 동기화했습니다.'))
+       .catch(e => alert('동기화 실패: ' + e));
+  },
+
+  renderTempSessions: function() {
+    const list = document.getElementById('bundle-session-list-preview');
+    if (!list) return;
+    list.innerHTML = '';
+    AppState.tempBundleSessions.forEach((s, idx) => {
+      const li = document.createElement('li');
+      li.className = 'flex justify-between items-center text-sm py-1';
+      li.innerHTML = `<span>${s.title} (${s.date})</span> <button type="button" class="text-red-500" data-idx="${idx}">X</button>`;
+      list.appendChild(li);
+    });
+    list.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        AppState.tempBundleSessions.splice(parseInt(e.target.dataset.idx), 1);
+        this.renderTempSessions();
+      });
+    });
+  },
+
+  setupEventListeners: function() {
+    // Navigation
+    document.querySelectorAll('[data-switch-view]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        this.switchView(e.currentTarget.dataset.switchView);
+      });
+    });
+
+    // Admin Tabs
+    document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        this.switchAdminTab(e.currentTarget.dataset.adminTab);
+      });
+    });
+
+    // Create bundle modal
+    const btnCreateBundle = document.getElementById('btn-create-bundle');
+    const modalCreate = document.getElementById('modal-create-bundle');
+    const btnAddSession = document.getElementById('btn-bundle-add-session');
+    const btnSubmitBundle = document.getElementById('btn-bundle-create-submit');
+
+    if (btnCreateBundle && modalCreate) {
+      btnCreateBundle.addEventListener('click', () => {
+        document.getElementById('input-bundle-name').value = '';
+        document.getElementById('input-bundle-session-title').value = '';
+        document.getElementById('input-bundle-session-date').value = '';
+        AppState.tempBundleSessions = [];
+        this.renderTempSessions();
+        modalCreate.classList.remove('hidden');
+      });
+    }
+
+    if (btnAddSession) {
+      btnAddSession.addEventListener('click', () => {
+        const t = document.getElementById('input-bundle-session-title').value.trim();
+        const d = document.getElementById('input-bundle-session-date').value.trim();
+        if (t && d) {
+           AppState.tempBundleSessions.push({ id: 'sess_' + new Date().getTime(), title: t, date: d });
+           this.renderTempSessions();
+           document.getElementById('input-bundle-session-title').value = '';
+        }
+      });
+    }
+
+    if (btnSubmitBundle) {
+      btnSubmitBundle.addEventListener('click', () => {
+        const name = document.getElementById('input-bundle-name').value.trim();
+        if (!name) { alert('묶음 이름을 입력하세요.'); return; }
+        if (AppState.tempBundleSessions.length === 0) { alert('최소 1개의 연수를 추가하세요.'); return; }
+        this.createBundle(name, [...AppState.tempBundleSessions]);
+        modalCreate.classList.add('hidden');
+      });
+    }
+
+    modalCreate?.addEventListener('click', (e) => {
+       if (e.target === modalCreate) modalCreate.classList.add('hidden');
+    });
+
+    // Admin Password Modal
+    const btnPwSubmit = document.getElementById('btn-admin-pw-submit');
+    const btnPwCancel = document.getElementById('btn-admin-pw-cancel');
+    const inputPw = document.getElementById('input-admin-pw');
+
+    if (btnPwSubmit) btnPwSubmit.addEventListener('click', () => this.handleAdminPasswordSubmit());
+    if (btnPwCancel) btnPwCancel.addEventListener('click', () => document.getElementById('modal-admin-password').classList.add('hidden'));
+    if (inputPw) {
+      inputPw.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') this.handleAdminPasswordSubmit();
+      });
+    }
+
+    // Passwords change
+    document.getElementById('btn-change-admin-pw')?.addEventListener('click', () => this.handleChangeAdminPassword());
+    document.getElementById('btn-change-master-pw')?.addEventListener('click', () => this.handleChangeMasterPassword());
+
+    // Settings save
+    const formSettings = document.getElementById('form-session-info');
+    if (formSettings) {
+      formSettings.addEventListener('input', () => {
+        if (!AppState.currentBundle) return;
+        AppState.currentBundle.location = document.getElementById('input-session-location').value;
+        AppState.currentBundle.organizer = document.getElementById('input-session-organizer').value;
+        AppState.currentBundle.verifierDept = document.getElementById('input-verifier-dept').value;
+        AppState.currentBundle.verifierName = document.getElementById('input-verifier-name').value;
+        AppState.currentBundle.showApprovalBox = document.getElementById('check-show-approval').checked;
+        AppState.currentBundle.approvalStages = document.getElementById('input-approval-stages').value.split(',').map(s=>s.trim());
+        
+        const stageContainer = document.getElementById('approval-stages-container');
+        if(stageContainer) {
+          if (AppState.currentBundle.showApprovalBox) stageContainer.classList.remove('hidden');
+          else stageContainer.classList.add('hidden');
+        }
+        
+        this.saveBundles();
+      });
+    }
+
+    // Add session in settings
+    const btnAddSess = document.getElementById('btn-add-session-to-bundle');
+    if (btnAddSess) {
+      btnAddSess.addEventListener('click', () => {
+         if (!AppState.currentBundle) return;
+         const title = document.getElementById('input-new-session-title').value.trim();
+         const date = document.getElementById('input-new-session-date').value.trim();
+         if (title && date) {
+            this.addSessionToBundle(AppState.currentBundle.id, title, date);
+            document.getElementById('input-new-session-title').value = '';
+         }
+      });
+    }
+
+    // Filters and search
+    const pSelect = document.getElementById('participant-dept-select');
+    if (pSelect) {
+      pSelect.addEventListener('change', (e) => {
+        AppState.selectedDepartment = e.target.value;
+        this.renderParticipantNameList();
+      });
+    }
+
+    const pSearch = document.getElementById('participant-name-search');
+    if (pSearch) {
+      pSearch.addEventListener('input', (e) => {
+        AppState.searchQuery = e.target.value;
+        this.renderParticipantNameList();
+      });
+    }
+
+    const aSelect = document.getElementById('admin-dept-filter');
+    if (aSelect) {
+      aSelect.addEventListener('change', (e) => {
+        AppState.selectedDepartment = e.target.value;
+        this.renderAdminOverview(e.target.value);
+      });
+    }
+
+    // Signature Pad buttons
+    document.getElementById('btn-clear-signature')?.addEventListener('click', () => AppState.signaturePad?.clear());
+    document.getElementById('btn-undo-signature')?.addEventListener('click', () => AppState.signaturePad?.undo());
+    document.getElementById('btn-cancel-signature')?.addEventListener('click', () => this.cancelSigning());
+    document.getElementById('btn-submit-signature')?.addEventListener('click', () => this.handleSignatureSubmit());
+
+    // Add attendee modal
+    document.getElementById('btn-open-add-attendee')?.addEventListener('click', () => {
+      document.getElementById('modal-add-attendee')?.classList.remove('hidden');
+    });
+    document.getElementById('btn-close-add-modal')?.addEventListener('click', () => {
+      document.getElementById('modal-add-attendee')?.classList.add('hidden');
+    });
+    document.getElementById('form-add-attendee')?.addEventListener('submit', (e) => this.handleDirectAddAttendee(e));
+
+    // Absent modal
+    document.getElementById('btn-close-absent-modal')?.addEventListener('click', () => {
+      document.getElementById('modal-absent-reason')?.classList.add('hidden');
+    });
+    document.getElementById('form-absent-reason')?.addEventListener('submit', (e) => this.handleAbsentSubmit(e));
+
+    // Fullscreen QR
+    document.getElementById('btn-open-fullscreen-qr')?.addEventListener('click', () => {
+      this.renderLargeQrCode();
+      document.getElementById('modal-fullscreen-qr')?.classList.remove('hidden');
+    });
+    document.getElementById('btn-close-qr-modal')?.addEventListener('click', () => {
+      document.getElementById('modal-fullscreen-qr')?.classList.add('hidden');
+    });
+
+    // PDF / Export
+    document.getElementById('btn-download-pdf')?.addEventListener('click', () => {
+      if (typeof PdfGenerator !== 'undefined' && AppState.currentBundle) {
+        PdfGenerator.downloadAllSessionPdfs(AppState.currentBundle);
       }
+    });
+    document.getElementById('btn-print-doc')?.addEventListener('click', () => {
+       window.print();
+    });
+    document.getElementById('btn-export-excel')?.addEventListener('click', () => {
+      if (typeof PdfGenerator !== 'undefined' && AppState.currentBundle) {
+        PdfGenerator.exportToExcel(AppState.currentBundle);
+      }
+    });
 
-      const currentStatus = att.status || (att.isSigned ? '출석' : '미서명');
-      const statusSelectHtml = `
-        <select onchange="App.changeAttendeeStatus('${att.id}', this.value)" class="text-xs py-1 px-2 rounded-lg border border-gray-300 bg-white font-medium focus:ring-1 focus:ring-blue-500 outline-none">
-          <option value="미서명" ${currentStatus === '미서명' ? 'selected' : ''}>미서명</option>
-          <option value="출석" ${currentStatus === '출석' ? 'selected' : ''}>출석(서명)</option>
-          <option value="출장" ${currentStatus === '출장' ? 'selected' : ''}>출장</option>
-          <option value="연가" ${currentStatus === '연가' ? 'selected' : ''}>연가</option>
-          <option value="공가" ${currentStatus === '공가' ? 'selected' : ''}>공가</option>
-          <option value="병가" ${currentStatus === '병가' ? 'selected' : ''}>병가</option>
-          <option value="조퇴" ${currentStatus === '조퇴' ? 'selected' : ''}>조퇴</option>
-        </select>
-      `;
+    // GAS Sync
+    document.getElementById('btn-save-gas-url')?.addEventListener('click', () => {
+      if (typeof GasSync !== 'undefined') {
+        const url = document.getElementById('input-gas-url').value.trim();
+        GasSync.setScriptUrl(url);
+        GasSync.testConnection().then(ok => {
+           document.getElementById('gas-test-result').textContent = ok ? '연결 성공' : '연결 실패';
+           this.updateGasStatusBadge(ok);
+        });
+      }
+    });
+    
+    document.getElementById('btn-force-sync-gas')?.addEventListener('click', () => this.syncToGoogleSheet());
+    document.getElementById('btn-fetch-from-gas')?.addEventListener('click', () => this.syncFromGoogleSheet(true));
 
-      return `
-        <tr class="hover:bg-gray-50 border-b border-gray-100 text-sm">
-          <td class="py-3 px-3 text-center text-gray-500 font-mono">${idx + 1}</td>
-          <td class="py-3 px-3 text-center font-medium text-gray-800">${att.department}</td>
-          <td class="py-3 px-3 text-center text-gray-600">${att.position || '-'}</td>
-          <td class="py-3 px-3 text-center font-bold text-gray-900">${att.name}</td>
-          <td class="py-3 px-3 text-center">${statusSelectHtml}</td>
-          <td class="py-3 px-3 text-center">${signThumb}</td>
-          <td class="py-3 px-3 text-center text-xs text-gray-500">${att.note || (att.isDirectAdded ? '현장추가' : '-')}</td>
-          <td class="py-3 px-3 text-center">
-            <button onclick="App.deleteAttendee('${att.id}')" class="text-red-500 hover:text-red-700 text-xs p-1" title="삭제">
-              <i class="fas fa-trash-alt"></i>
-            </button>
-          </td>
-        </tr>
-      `;
-    }).join('');
-  },
-
-  changeAttendeeStatus(id, newStatus) {
-    const att = AppState.attendees.find(a => a.id === id);
-    if (!att) return;
-
-    att.status = newStatus;
-    if (newStatus === '미서명') {
-      att.isSigned = false;
-      att.signatureData = null;
-    } else if (newStatus !== '출석') {
-      att.isSigned = false;
-      att.signatureData = null;
-    }
-
-    this.saveToStorage();
-    this.render();
-    this.renderPdfPreview();
-
-    // 구글 시트에 상태 동기화
-    GasSync.submitSignature(AppState.session.id, att);
-  },
-
-  deleteAttendee(id) {
-    if (!confirm('이 참석자를 명단에서 삭제하시겠습니까?')) return;
-    AppState.attendees = AppState.attendees.filter(a => a.id !== id);
-    this.saveToStorage();
-    this.render();
-    this.renderPdfPreview();
-
-    // 구글 시트 갱신
-    if (GasSync.getScriptUrl()) {
-      GasSync.syncInitialRoster(AppState.session, AppState.attendees);
-    }
-  },
-
-  renderPdfPreview() {
-    PdfGenerator.renderPreviewDocument(AppState.session, AppState.attendees);
-  },
-
-  getShareSignUrl() {
-    const base = window.location.href.split('?')[0];
-    const gasUrl = GasSync.getScriptUrl();
-    const sheetName = GasSync.getSheetName() || (AppState.session.title ? AppState.session.title.substring(0, 30) : '');
-    let url = `${base}?view=participant`;
-    if (gasUrl) {
-      url += `&gas=${encodeURIComponent(gasUrl)}`;
-    }
-    if (sheetName) {
-      url += `&sheet=${encodeURIComponent(sheetName)}`;
-    }
-    return url;
-  },
-
-  renderAdminQrCode() {
-    const qrContainer = document.getElementById('admin-qr-code-container');
-    const qrUrlText = document.getElementById('admin-qr-url-text');
-    if (!qrContainer) return;
-
-    const signUrl = this.getShareSignUrl();
-    if (qrUrlText) qrUrlText.textContent = signUrl;
-
-    qrContainer.innerHTML = '';
-    if (window.QRCode) {
-      new QRCode(qrContainer, {
-        text: signUrl,
-        width: 180,
-        height: 180,
-        colorDark: '#0f172a',
-        colorLight: '#ffffff',
-        correctLevel: QRCode.CorrectLevel.H
-      });
-    }
-  },
-
-  renderLargeQrCode() {
-    const qrContainer = document.getElementById('large-qr-code-container');
-    if (!qrContainer) return;
-
-    const signUrl = this.getShareSignUrl();
-    qrContainer.innerHTML = '';
-    if (window.QRCode) {
-      new QRCode(qrContainer, {
-        text: signUrl,
-        width: 320,
-        height: 320,
-        colorDark: '#0f172a',
-        colorLight: '#ffffff',
-        correctLevel: QRCode.CorrectLevel.H
-      });
-    }
+    this.setupFileUpload();
   }
 };
 
 window.App = App;
+document.addEventListener('DOMContentLoaded', () => App.init());
