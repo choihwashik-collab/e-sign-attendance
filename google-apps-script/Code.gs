@@ -22,7 +22,7 @@ function doGet(e) {
 }
 
 function doPost(e) {
-  var lock = LockService.getDocumentLock();
+  var lock = LockService.getScriptLock();
   try {
     lock.waitLock(30000);
     var payload = JSON.parse(e.postData.contents || '{}');
@@ -54,14 +54,14 @@ function saveBundle_(bundle) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var registry = getRegistry_(ss);
   var registryRow = findRegistryRow_(registry, bundle.id);
-  var sheet = registryRow ? ss.getSheetById(Number(registry.getRange(registryRow, 11).getValue())) : null;
+  var sheet = registryRow > 0 ? ss.getSheetById(Number(registry.getRange(registryRow, 11).getValue())) : null;
+  var attendees = bundle.attendees || [];
+  var rows = attendees.map(function(a) { return attendeeRow_(a); });
   if (!sheet) sheet = ss.insertSheet(makeSheetName_(bundle));
 
   sheet.clear();
   sheet.getRange(1, 1, 1, ATTENDANCE_HEADERS.length).setValues([ATTENDANCE_HEADERS]).setFontWeight('bold').setBackground('#f3f4f6');
-  var attendees = bundle.attendees || [];
   if (attendees.length) {
-    var rows = attendees.map(function(a) { return attendeeRow_(a); });
     sheet.getRange(2, 1, rows.length, ATTENDANCE_HEADERS.length).setValues(rows);
   }
   sheet.setFrozenRows(1);
@@ -74,7 +74,7 @@ function saveAttendee_(bundleId, bundleMetadata, attendee) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var registry = getRegistry_(ss);
   var registryRow = findRegistryRow_(registry, bundleId);
-  if (!registryRow) {
+  if (registryRow < 0) {
     var initial = bundleMetadata || { id: bundleId, name: '연수 출석부', sessions: [] };
     initial.id = bundleId;
     initial.attendees = [attendee];
@@ -198,7 +198,7 @@ function makeSheetName_(bundle) {
 }
 
 function cleanupOldSheets() {
-  var lock = LockService.getDocumentLock();
+  var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
