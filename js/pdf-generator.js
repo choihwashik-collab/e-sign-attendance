@@ -5,6 +5,8 @@
  */
 
 const PdfGenerator = {
+  escape(value) { return String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); },
+  safeSignature(value) { return /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(value || '') ? value : ''; },
   getStatusDisplay(att) {
     if (att.status === '출장') return { text: '출장', isSpecial: true };
     if (att.status === '연가') return { text: '연가', isSpecial: true };
@@ -34,7 +36,7 @@ const PdfGenerator = {
 
     let approvalBoxHtml = '';
     if (session.showApprovalBox && Array.isArray(session.approvalStages) && session.approvalStages.length > 0) {
-      const thStages = session.approvalStages.map(stage => `<th>${stage.trim()}</th>`).join('');
+      const thStages = session.approvalStages.map(stage => `<th>${this.escape(stage.trim())}</th>`).join('');
       const tdSpaces = session.approvalStages.map(() => `<td class="sign-space"></td>`).join('');
       approvalBoxHtml = `
         <table class="approval-box">
@@ -52,27 +54,19 @@ const PdfGenerator = {
       const statusInfo = this.getStatusDisplay(att);
       let signCellContent = '';
 
-      if (statusInfo.isSpecial) {
-        signCellContent = `<span style="font-weight: 700; color: #1e40af; font-size: 13px;">${statusInfo.text}</span>`;
-      } else if (att.isSigned && att.signatureData) {
-        signCellContent = `<img src="${att.signatureData}" alt="${att.name} 서명" />`;
-      } else {
-        signCellContent = `<span style="color: #9ca3af; font-size: 11px;">-</span>`;
+      if (!statusInfo.isSpecial && att.isSigned && this.safeSignature(att.signatureData)) {
+        signCellContent = `<img src="${this.safeSignature(att.signatureData)}" alt="${this.escape(att.name)} 서명" />`;
       }
-
-      let noteText = '';
-      if (att.isDirectAdded) noteText = '현장추가';
-      if (statusInfo.isSpecial) noteText = statusInfo.text;
-      if (att.note) noteText = att.note;
+      const noteText = this.noteText(att);
 
       tableRowsHtml += `
         <tr>
           <td style="width: 45px;">${idx + 1}</td>
-          <td style="width: 120px;">${att.department || '-'}</td>
-          <td style="width: 85px;">${att.position || '-'}</td>
-          <td style="width: 95px; font-weight: 600;">${att.name}</td>
+          <td style="width: 120px;">${this.escape(att.department || '-')}</td>
+          <td style="width: 85px;">${this.escape(att.position || '-')}</td>
+          <td style="width: 95px; font-weight: 600;">${this.escape(att.name)}</td>
           <td class="signature-cell" style="width: 140px;">${signCellContent}</td>
-          <td style="width: 80px; font-size: 11px; color: #4b5563;">${noteText}</td>
+          <td style="width: 80px; font-size: 11px; color: #4b5563;">${this.escape(noteText)}</td>
         </tr>
       `;
     });
@@ -90,15 +84,15 @@ const PdfGenerator = {
       <div class="a4-preview-paper" id="a4-target-paper">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111827; padding-bottom: 12px; margin-bottom: 14px;">
           <div>
-            <h1 style="font-size: 22px; font-weight: 700; color: #111827; margin: 0; letter-spacing: -0.5px;">${displayTitle}</h1>
+            <h1 style="font-size: 22px; font-weight: 700; color: #111827; margin: 0; letter-spacing: -0.5px;">${this.escape(displayTitle)}</h1>
           </div>
           <div>${approvalBoxHtml}</div>
         </div>
 
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px 14px; margin-bottom: 14px; font-size: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
-          <div><strong>• 일 시 :</strong> ${dateStr}</div>
-          <div><strong>• 장 소 :</strong> ${session.location || '지정 연수실'}</div>
-          <div><strong>• 주 관 :</strong> ${session.organizer || '담당 부서'}</div>
+          <div><strong>• 일 시 :</strong> ${this.escape(dateStr)}</div>
+          <div><strong>• 장 소 :</strong> ${this.escape(session.location || '지정 연수실')}</div>
+          <div><strong>• 주 관 :</strong> ${this.escape(session.organizer || '담당 부서')}</div>
         </div>
 
         <table class="doc-table">
@@ -113,7 +107,7 @@ const PdfGenerator = {
           <p style="font-weight: 600; font-size: 13px; margin-bottom: 20px;">
             ${new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })}
           </p>
-          <p style="font-weight: 700; font-size: 14px; letter-spacing: 0.5px;">${verifierText}</p>
+          <p style="font-weight: 700; font-size: 14px; letter-spacing: 0.5px;">${this.escape(verifierText)}</p>
         </div>
       </div>
     `;
@@ -124,9 +118,7 @@ const PdfGenerator = {
     if (!targetElement) { alert('출력할 서명부 내용이 없습니다.'); return; }
 
     if (!window.html2canvas || !window.jspdf) {
-      alert('PDF 생성 라이브러리가 로드되지 않았습니다.');
-      window.print();
-      return;
+      throw new Error('PDF 생성 라이브러리가 로드되지 않았습니다. 인터넷 연결을 확인하거나 브라우저 인쇄를 사용하세요.');
     }
 
     const downloadBtn = document.getElementById('btn-download-pdf');
@@ -155,8 +147,7 @@ const PdfGenerator = {
       pdf.save(fileName);
     } catch (err) {
       console.error('PDF Generation Error:', err);
-      alert('PDF 생성 중 오류가 발생했습니다.');
-      window.print();
+      throw new Error('PDF 생성 중 오류가 발생했습니다. 브라우저 인쇄를 사용하거나 다시 시도하세요.');
     } finally {
       if (downloadBtn) { downloadBtn.disabled = false; downloadBtn.innerHTML = originalText; }
     }
@@ -171,6 +162,7 @@ const PdfGenerator = {
     const downloadBtn = document.getElementById('btn-download-pdf');
     const originalText = downloadBtn ? downloadBtn.innerHTML : '';
 
+    try {
     for (let i = 0; i < bundle.sessions.length; i++) {
       const sess = bundle.sessions[i];
       if (downloadBtn) {
@@ -184,30 +176,46 @@ const PdfGenerator = {
       await new Promise(r => setTimeout(r, 500));
     }
 
-    if (downloadBtn) { downloadBtn.disabled = false; downloadBtn.innerHTML = originalText; }
+    } finally {
+      if (downloadBtn) { downloadBtn.disabled = false; downloadBtn.innerHTML = originalText; }
+    }
     alert(`총 ${bundle.sessions.length}개 연수의 PDF가 생성되었습니다.`);
   },
 
-  exportToExcel(session, attendees, fileName = '연수_출석명단.xlsx') {
-    if (!window.XLSX) { alert('Excel 내보내기 라이브러리가 로드되지 않았습니다.'); return; }
-
-    const rows = attendees.map((a, idx) => {
-      const statusInfo = this.getStatusDisplay(a);
-      let signStatusStr = '미서명';
-      if (statusInfo.isSpecial) signStatusStr = statusInfo.text;
-      else if (a.isSigned) signStatusStr = '서명완료';
-      return {
-        '연번': idx + 1, '소속(부서)': a.department, '직급': a.position,
-        '성명': a.name, '서명/출석상태': signStatusStr,
-        '비고': a.note || (a.isDirectAdded ? '현장추가' : '')
-      };
+  noteText(att) {
+    const info=this.getStatusDisplay(att),note=String(att.note||'');
+    return info.isSpecial ? (note.startsWith(info.text)?note:info.text+(note?': '+note:'')) : (note||(att.isDirectAdded?'현장추가':''));
+  },
+  buildExcelWorkbook(session, attendees) {
+    if (!window.ExcelJS) throw new Error('Excel 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
+    const workbook=new window.ExcelJS.Workbook(),sheet=workbook.addWorksheet('출석서명부');
+    sheet.columns=[{width:7},{width:20},{width:14},{width:15},{width:25},{width:28}];
+    sheet.mergeCells('A1:F1');sheet.getCell('A1').value=String(session.name||session.title||'출석서명부');
+    sheet.getCell('A1').font={name:'맑은 고딕',size:16,bold:true};sheet.getRow(1).height=28;
+    sheet.mergeCells('A2:F2');sheet.getCell('A2').value=(session.sessions||[]).map(s=>[s.date,s.title].filter(Boolean).join(' ')).join(' / ');
+    sheet.getRow(2).height=32;sheet.addRow(['연번','소속 (부서)','직급','성명','서명','비고']);
+    attendees.forEach((a,index)=>{
+      const row=sheet.addRow([index+1,String(a.department||''),String(a.position||''),String(a.name||''),'',this.noteText(a)]);
+      row.height=42;
+      if(!this.getStatusDisplay(a).isSpecial && a.isSigned && this.safeSignature(a.signatureData)){
+        const id=workbook.addImage({base64:a.signatureData,extension:'png'});
+        sheet.addImage(id,{tl:{col:4.1,row:row.number-0.9},br:{col:4.9,row:row.number-0.1},editAs:'oneCell'});
+      }
     });
-
-    const worksheet = window.XLSX.utils.json_to_sheet(rows);
-    const workbook = window.XLSX.utils.book_new();
-    window.XLSX.utils.book_append_sheet(workbook, worksheet, '출석서명부');
-    window.XLSX.writeFile(workbook, fileName);
+    sheet.eachRow(row=>row.eachCell({includeEmpty:true},cell=>{
+      cell.alignment={vertical:'middle',horizontal:'center',wrapText:true};
+      if(row.number>2){cell.font={name:'맑은 고딕',size:11,bold:row.number===3};
+        cell.border={top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}};}
+    }));
+    sheet.pageSetup={paperSize:9,orientation:'portrait',fitToPage:true,fitToWidth:1,fitToHeight:0,printTitlesRow:'1:3'};
+    return workbook;
+  },
+  async exportToExcel(session, attendees, fileName = '연수_출석명단.xlsx') {
+    const bytes=await this.buildExcelWorkbook(session,attendees).xlsx.writeBuffer();
+    const url=URL.createObjectURL(new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    const link=document.createElement('a');link.href=url;link.download=fileName;
+    document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
   }
 };
-
 window.PdfGenerator = PdfGenerator;
+

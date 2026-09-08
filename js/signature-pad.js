@@ -198,6 +198,25 @@ class SmoothSignaturePad {
   toDataURL(type = 'image/png') {
     return this.canvas.toDataURL(type);
   }
+
+  toCompactDataURL() {
+    return SmoothSignaturePad.compactCanvas(this.canvas);
+  }
+
+  static compactCanvas(source) {
+    let width = Math.min(source.width, 512);
+    while (width >= 160) {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = Math.max(1, Math.round(source.height * width / source.width));
+      canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
+      const result = canvas.toDataURL('image/png');
+      if (result.length <= 16000) return result;
+      width = Math.floor(width * 0.8);
+    }
+    throw new Error('서명이 너무 복잡합니다. 지우고 간단히 다시 서명해 주세요.');
+  }
 }
 
 window.SmoothSignaturePad = SmoothSignaturePad;
+

@@ -1,92 +1,116 @@
-/** Google Apps Script / Google Sheets synchronization client (v7). */
+/** v8 transport: credentials in POST bodies; short-lived random receipts confirm server results. */
 const GasSync = {
-  DEFAULT_SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbxC4C0dhdK7T1LvJRdPNE6dyx7qi9glSMDP-BuLcd8liP5wLjFg2mIqPgMI8FdasAMR/exec',
-  getScriptUrl() { return localStorage.getItem('eSign_gasUrl') || this.DEFAULT_SCRIPT_URL; },
-  setScriptUrl(url) {
-    const value = (url || '').trim();
-    if (value) localStorage.setItem('eSign_gasUrl', value);
-    else localStorage.removeItem('eSign_gasUrl');
+  adminKey: '',
+  participant: null,
+  scriptUrl: '',
+  async initialize() {
+    this.scriptUrl = localStorage.getItem('eSign_server_v8') || '';
+    if (this.scriptUrl && !this.isValidUrl(this.scriptUrl)) this.scriptUrl = '';
   },
-  async testConnection(url) {
-    const targetUrl = (url || this.getScriptUrl()).trim();
-    if (!targetUrl) return { success: false, message: 'Google Apps Script URL을 입력해 주세요.' };
-    if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:\?|$)/.test(targetUrl)) {
-      return { success: false, message: '배포된 웹 앱의 /exec URL을 입력해 주세요.' };
+  isValidUrl(url) { return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url || ''); },
+  getScriptUrl() { return this.scriptUrl; },
+  setScriptUrl(url, persist = true) {
+    const value = String(url || '').trim();
+    if (value && !this.isValidUrl(value)) throw new Error('정확한 Google Apps Script /exec 주소만 허용됩니다. 쿼리와 다른 도메인은 사용할 수 없습니다.');
+    if (value !== this.scriptUrl) { this.adminKey = ''; this.participant = null; }
+    this.scriptUrl = value;
+    if (persist) {
+      if (value) localStorage.setItem('eSign_server_v8', value);
+      else localStorage.removeItem('eSign_server_v8');
     }
-    const result = await this._jsonpRequest(targetUrl, { action: 'ping' }, 8000);
-    return result && result.success
-      ? { success: true, message: result.message || '구글 스프레드시트 연결 성공' }
-      : { success: false, message: '연결하지 못했습니다. 웹 앱 배포 권한을 확인해 주세요.' };
   },
+  randomHex(bytes = 32) {
+    return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), b => b.toString(16).padStart(2,'0')).join('');
+  },
+  async testConnection(url = this.getScriptUrl()) {
+    if (!this.isValidUrl(url)) return {success:false,message:'연동 주소가 없습니다.'};
+    const result = await this._jsonpRequest(url,{action:'ping'});
+    const success = result?.success && result.apiVersion === 9;
+    return {success:!!success,message:success?'서버 연결 확인':'서버 업데이트 또는 연결 확인이 필요합니다.'};
+  },
+  async login(key) {
+    if (typeof key !== 'string' || key.length < 32) throw new Error('스크립트 속성의 관리자 키(32자 이상)를 입력하세요.');
+    if (!(await this.testConnection()).success) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
+    const result = await this._post({action:'login'},key);
+    if (result.apiVersion !== 9) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
+    this.adminKey = key;
+    this.participant = null;
+    return result;
+  },
+  logout() { this.adminKey=''; this.participant=null; },
+  async fetchBundles() { return (await this._post({action:'listBundles'})).bundles; },
+  async fetchBundle(bundleId) { return (await this._post({action:'getBundle',bundleId})).bundle; },
   async syncBundle(bundle) {
-    if (!bundle || !bundle.id) return { success: false, message: '연수 묶음 정보가 없습니다.' };
-    return this._post({ action: 'initBundle', bundle });
-  },
-  async syncInitialRoster(bundle, attendees) {
-    if (typeof bundle === 'object') return this.syncBundle({ ...bundle, attendees: attendees || bundle.attendees || [] });
-    return { success: false, message: '연수 묶음 전체 정보가 필요합니다.' };
+    return this._post({action:'initBundle',bundle,expectedRevision:bundle.revision});
   },
   async submitAttendee(bundle, attendee) {
-    if (!bundle || !bundle.id || !attendee) return { success: false, message: '전송할 출석 정보가 없습니다.' };
-    return this._post({ action: 'submitAttendee', bundleId: bundle.id, bundle: this._bundleMetadata(bundle), attendee });
+    return this._post({action:'submitAttendee',bundleId:bundle.id,attendee,expectedRevision:bundle.revision});
   },
-  async submitSignature(bundle, attendee) { return this.submitAttendee(bundle, attendee); },
-  async fetchBundle(bundleId) {
+  async submitSignature(bundle, attendee) {
+    return this._post({action:'submitSignature',bundleId:bundle.id,attendeeId:attendee.id,signatureData:attendee.signatureData,expectedSignedAt:attendee.signedAt || null});
+  },
+  async submitReason(bundle,attendee,status,note) {
+    return this._post({action:'submitReason',bundleId:bundle.id,attendeeId:attendee.id,status,note,expectedSignedAt:attendee.signedAt || null});
+  },
+  async listRosters(){return (await this._post({action:'listRosters'})).rosters;},
+  async saveRoster(roster){return this._post({action:'saveRoster',roster,expectedRevision:roster.revision});},
+  async deleteRoster(roster){return this._post({action:'deleteRoster',rosterId:roster.id,expectedRevision:roster.revision});},
+  async deleteBundle(bundle) {
+    return this._post({action:'deleteBundle',bundleId:bundle.id,expectedRevision:bundle.revision});
+  },
+  async shareBundle(bundleId) { return this._post({action:'shareBundle',bundleId}); },
+  async closeSharing(bundleId) { return this._post({action:'closeSharing',bundleId}); },
+  async _post(payload, loginKey) {
     const url = this.getScriptUrl();
-    if (!url || !bundleId) return null;
-    const data = await this._jsonpRequest(url, { action: 'getBundle', bundleId }, 10000);
-    return data && data.success && data.bundle ? data.bundle : null;
-  },
-  async fetchBundles() {
-    const url = this.getScriptUrl();
-    if (!url) return [];
-    const data = await this._jsonpRequest(url, { action: 'listBundles' }, 10000);
-    return data && data.success && Array.isArray(data.bundles) ? data.bundles : [];
-  },
-  async deleteBundle(bundleId) {
-    if (!bundleId) return { success: false, message: '삭제할 묶음 ID가 없습니다.' };
-    return this._post({ action: 'deleteBundle', bundleId });
-  },
-  async fetchLiveStatus(bundleId) {
-    const bundle = await this.fetchBundle(bundleId);
-    return bundle ? bundle.attendees || [] : null;
-  },
-  _bundleMetadata(bundle) {
-    return {
-      id: bundle.id, name: bundle.name || '', createdAt: bundle.createdAt || new Date().toISOString(),
-      sessions: bundle.sessions || [], location: bundle.location || '', organizer: bundle.organizer || '',
-      verifierDept: bundle.verifierDept || '', verifierName: bundle.verifierName || '',
-      showApprovalBox: !!bundle.showApprovalBox, approvalStages: bundle.approvalStages || []
-    };
-  },
-  async _post(payload) {
-    const url = this.getScriptUrl();
-    if (!url) return { success: false, message: 'GAS URL이 설정되지 않았습니다.' };
+    if (!this.isValidUrl(url)) throw new Error('서버 주소를 먼저 설정하세요.');
+    const requestId = this.randomHex();
+    const body = {...payload,requestId};
+    if (loginKey || this.adminKey) body.adminKey=loginKey || this.adminKey;
+    else if (this.participant?.bundleId === payload.bundleId) body.token=this.participant.token;
+    else throw new Error('진행자 로그인 또는 유효한 초대 링크가 필요합니다.');
+    const controller = new AbortController();
+    const timer = setTimeout(()=>controller.abort(),45000);
     try {
-      await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
-      return { success: true };
-    } catch (error) {
-      console.error('[GasSync] POST failed:', error);
-      return { success: false, message: error.message };
-    }
+      await fetch(url,{method:'POST',mode:'no-cors',credentials:'omit',referrerPolicy:'no-referrer',
+        headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body),signal:controller.signal});
+      const deadline=Date.now()+45000;
+      let receipt;
+      while (Date.now()<deadline) {
+        receipt=await this._jsonpRequest(url,{action:'receipt',requestId});
+        if (receipt?.ready) break;
+        await new Promise(r=>setTimeout(r,1000));
+      }
+      if (!receipt?.ready || !Number.isInteger(receipt.parts) || receipt.parts<1 || receipt.parts>223) throw new Error('저장 결과를 확인하지 못했습니다. 최신 자료를 불러와 확인한 후 재시도하세요.');
+      const parts=[];
+      for(let i=0;i<receipt.parts;i+=4) {
+        const batch=await Promise.all(Array.from({length:Math.min(4,receipt.parts-i)},(_,j)=>
+          this._jsonpRequest(url,{action:'receipt',requestId,part:i+j})));
+        if(batch.some(p=>typeof p?.part!=='string')) throw new Error('응답이 만료되었습니다. 최신 자료를 다시 불러오세요.');
+        parts.push(...batch.map(p=>p.part));
+      }
+      const result=JSON.parse(parts.join(''));
+      if(!result.success) throw new Error(result.message || '서버 처리 실패');
+      return result;
+    } finally { clearTimeout(timer); }
   },
-  _jsonpRequest(baseUrl, params, timeoutMs = 8000) {
-    return new Promise((resolve) => {
-      const callbackName = 'gas_cb_' + Math.random().toString(36).slice(2, 10);
-      const script = document.createElement('script');
-      let finished = false;
-      const cleanup = () => { delete window[callbackName]; if (script.parentNode) script.parentNode.removeChild(script); };
-      const finish = (value) => { if (finished) return; finished = true; cleanup(); resolve(value); };
-      window[callbackName] = finish;
-      script.onerror = () => finish(null);
-      const url = new URL(baseUrl);
-      url.searchParams.set('callback', callbackName);
-      url.searchParams.set('_t', Date.now().toString());
-      Object.entries(params || {}).forEach(([key, value]) => url.searchParams.set(key, value));
-      script.src = url.toString();
+  _jsonpRequest(baseUrl, params, timeoutMs = 7000) {
+    if (!this.isValidUrl(baseUrl)) return Promise.reject(new Error('허용되지 않은 서버 주소입니다.'));
+    return new Promise(resolve=>{
+      const callbackName='gas_cb_'+this.randomHex(16),script=document.createElement('script');
+      let finished=false,timer;
+      const finish=value=>{
+        if(finished)return;
+        finished=true;clearTimeout(timer);delete window[callbackName];script.remove();resolve(value);
+      };
+      window[callbackName]=finish;
+      script.onerror=()=>finish(null);
+      const url=new URL(baseUrl);
+      Object.entries({...params,callback:callbackName}).forEach(([k,v])=>url.searchParams.set(k,v));
+      script.src=url.href;script.referrerPolicy='no-referrer';
+      timer=setTimeout(()=>finish(null),timeoutMs);
       document.body.appendChild(script);
-      setTimeout(() => finish(null), timeoutMs);
     });
   }
 };
-window.GasSync = GasSync;
+window.GasSync=GasSync;
+

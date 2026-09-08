@@ -2,30 +2,20 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://cdn.sheetjs.com https://script.google.com https://script.googleusercontent.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; font-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net data:; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://cdn.jsdelivr.net; worker-src 'self' blob: https://cdn.jsdelivr.net; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <title>연수 참석자 전자 서명 시스템</title>
     
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        brand: { 50:'#eff6ff', 100:'#dbeafe', 500:'#3b82f6', 600:'#2563eb', 700:'#1d4ed8', 800:'#1e40af', 900:'#1e3a8a' }
-                    }
-                }
-            }
-        }
-    </script>
+    <link rel="stylesheet" href="css/tailwind.css?v=10">
     
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <script>if(window.pdfjsLib){window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js" integrity="sha384-qovJwSBbRDPP5cEjCp8S0UP66wrvnjaa60XMOGzTNanrThcrGfXfnZkvgY8N1KT3" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js" integrity="sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz" crossorigin="anonymous"></script>
     
     <link rel="stylesheet" href="css/style.css">
 </head>
@@ -58,9 +48,15 @@
 
     <!-- MAIN CONTENT -->
     <main class="flex-grow w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div id="app-message" class="app-message" role="status" aria-live="polite" hidden></div>
 
         <!-- VIEW 0: Bundle List -->
         <section id="view-bundle-list" class="space-y-6">
+            <div class="flex flex-wrap gap-2">
+                <button id="btn-login" class="px-4 py-2 rounded bg-blue-700 text-white">관리자 로그인</button>
+                <button id="btn-logout" class="px-4 py-2 rounded border">로그아웃</button>
+                <button id="btn-basic-rosters-home" class="px-4 py-2 rounded border">기본명단 관리</button>
+            </div>
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div>
                     <h1 class="text-2xl font-bold text-gray-900">연수 묶음 관리</h1>
@@ -125,14 +121,25 @@
                 <div class="text-center">
                     <p class="text-gray-500 text-sm mb-1"><span id="signing-person-dept"></span></p>
                     <h2 class="text-2xl font-bold text-gray-900"><span id="signing-person-name"></span></h2>
-                    <p class="text-sm text-gray-600 mt-2">아래 네모칸 안에 서명해주세요.</p>
+                    <p class="text-sm text-gray-600 mt-2">이름을 확인하세요. 이미 서명했어도 다시 저장할 수 있습니다.</p>
                 </div>
-                
-                <div class="relative rounded-xl overflow-hidden bg-white">
+                <div>
+                    <label for="participant-attendance-type" class="block text-sm font-medium mb-1">참석 / 사유</label>
+                    <select id="participant-attendance-type" class="w-full border border-gray-300 rounded-xl px-4 py-3">
+                        <option value="출석">출석 (서명)</option><option value="조퇴">조퇴</option><option value="출장">출장</option>
+                        <option value="연가">연가</option><option value="공가">공가</option><option value="병가">병가</option><option value="기타 불참">기타 불참</option>
+                    </select>
+                </div>
+                <div id="participant-note-area" class="hidden">
+                    <label for="participant-attendance-note" class="block text-sm font-medium mb-1">상세 사유 (선택)</label>
+                    <input id="participant-attendance-note" maxlength="400" class="w-full border border-gray-300 rounded-xl px-4 py-3" placeholder="예: 15시 이후 조퇴">
+                    <p class="text-sm text-gray-500 mt-2">사유는 비고란에 표시되며 서명란은 공란으로 저장됩니다.</p>
+                </div>
+                <div id="signature-input-area" class="relative rounded-xl overflow-hidden bg-white">
                     <canvas id="signature-canvas" class="w-full h-48 border-2 border-dashed border-gray-300 rounded-xl touch-none bg-white"></canvas>
                 </div>
 
-                <div class="flex justify-between">
+                <div id="signature-tools" class="flex justify-between">
                     <button id="btn-clear-signature" class="px-4 py-2 text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl font-medium transition-colors">
                         <i class="fas fa-eraser mr-1"></i>지우기
                     </button>
@@ -157,8 +164,8 @@
                     <i class="fas fa-check text-4xl text-green-500"></i>
                 </div>
                 <div>
-                    <h2 class="text-2xl font-bold text-gray-900 mb-2">서명 완료</h2>
-                    <p class="text-gray-600"><span id="complete-user-name" class="font-bold text-brand-600"></span>님의 서명이 저장되었습니다.</p>
+                    <h2 id="complete-heading" class="text-2xl font-bold text-gray-900 mb-2">서명 완료</h2>
+                    <p class="text-gray-600"><span id="complete-user-name" class="font-bold text-brand-600"></span><span id="complete-description">님의 서명이 저장되었습니다.</span></p>
                     <p class="text-sm text-gray-400 mt-1" id="complete-user-time"></p>
                 </div>
             </div>
@@ -248,6 +255,10 @@
 
                     <!-- Tab 2: Roster Upload -->
                     <div id="tab-pane-roster" class="hidden space-y-6">
+                        <div class="flex flex-wrap gap-2">
+                            <button id="btn-basic-rosters" class="px-4 py-2 bg-brand-600 text-white rounded-xl">기본명단 저장 / 불러오기</button>
+                            <button id="btn-edit-bundle-roster" class="px-4 py-2 border border-gray-300 rounded-xl">이번 연수 명단 수정</button>
+                        </div>
                         <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r-xl">
                             <div class="flex">
                                 <div class="flex-shrink-0">
@@ -337,6 +348,10 @@
                         </div>
 
                         <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-200 flex flex-col items-center">
+                            <div class="flex gap-2 mb-4">
+                                <button id="btn-issue-qr" class="px-4 py-2 bg-blue-700 text-white rounded">24시간 QR 발급</button>
+                                <button id="btn-close-sharing" class="px-4 py-2 bg-red-700 text-white rounded">접수 종료</button>
+                            </div>
                             <div id="admin-qr-code-container" class="mb-4"></div>
                             <span id="admin-qr-url-text" class="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-lg break-all max-w-[300px] text-center mb-4"></span>
                             
@@ -418,30 +433,14 @@
                             </div>
                         </form>
 
-                        <!-- 비밀번호 변경 -->
-                        <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                            <h3 class="text-lg font-bold text-gray-900 mb-4 pb-2 border-b">🔒 비밀번호 관리</h3>
-                            
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                <div class="space-y-3">
-                                    <h4 class="font-medium text-sm text-gray-700">관리자 비밀번호 변경</h4>
-                                    <p class="text-xs text-gray-500 mb-2">관리자 메뉴 접속용 (기본: 1234)</p>
-                                    <input id="input-master-pw-verify" type="password" placeholder="마스터 비밀번호 입력" class="w-full border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none">
-                                    <input id="input-new-admin-pw" type="password" placeholder="새 관리자 비밀번호" class="w-full border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none">
-                                    <button id="btn-change-admin-pw" class="w-full bg-gray-800 hover:bg-gray-900 text-white text-sm font-medium py-2 rounded-xl transition-colors">
-                                        관리자 비밀번호 변경
-                                    </button>
-                                </div>
-                                
-                                <div class="space-y-3">
-                                    <h4 class="font-medium text-sm text-gray-700">마스터 비밀번호 변경</h4>
-                                    <p class="text-xs text-gray-500 mb-2">비밀번호 초기화용 최고 권한 (기본: admin1234)</p>
-                                    <input id="input-current-master-pw" type="password" placeholder="현재 마스터 비밀번호" class="w-full border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none">
-                                    <input id="input-new-master-pw" type="password" placeholder="새 마스터 비밀번호" class="w-full border border-gray-300 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none">
-                                    <button id="btn-change-master-pw" class="w-full bg-red-600 hover:bg-red-700 text-white text-sm font-medium py-2 rounded-xl transition-colors">
-                                        마스터 비밀번호 변경
-                                    </button>
-                                </div>
+                        <div class="bg-white p-6 rounded-xl border">
+                            <h3 class="font-bold">관리자 인증</h3>
+                            <p>기본·마스터 비밀번호는 폐지했습니다. ADMIN_KEY는 Apps Script 프로젝트 설정의 스크립트 속성에서 변경합니다. 관리자 키는 현재 페이지 메모리에만 보관됩니다.</p>
+                            <button id="btn-change-admin-pw" type="button" class="border rounded p-2 mt-2">키 변경 안내</button>
+                            <div class="flex flex-wrap gap-2 mt-4">
+                                <button id="btn-backup" class="px-4 py-2 rounded border">자료 JSON 백업</button>
+                                <button id="btn-import-local" class="px-4 py-2 rounded border">기존 로컬 자료 가져오기</button>
+                                <button id="btn-disconnect" class="px-4 py-2 rounded border">서버 연결 해제</button>
                             </div>
                         </div>
 
@@ -449,7 +448,7 @@
                         <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
                             <div class="flex items-center justify-between mb-4 pb-2 border-b">
                                 <h3 class="text-lg font-bold text-gray-900 flex items-center">
-                                    <img src="https://upload.wikimedia.org/wikipedia/commons/3/30/Google_Sheets_logo_%282014-2020%29.svg" class="w-5 h-5 mr-2" alt="Google Sheets">
+                                    <span class="mr-2" aria-hidden="true">📊</span>
                                     구글 스프레드시트 연동
                                 </h3>
                             </div>
@@ -458,19 +457,19 @@
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-1">Apps Script Web App URL</label>
                                     <div class="flex gap-2">
-                                        <input id="input-gas-url" type="url" placeholder="https://script.google.com/macros/s/.../exec" class="flex-grow border border-gray-300 rounded-xl px-4 py-2 focus:ring-2 focus:ring-green-500 outline-none text-sm">
+                                        <input id="input-gas-url" type="url" readonly placeholder="https://script.google.com/macros/s/.../exec" class="flex-grow border border-gray-300 rounded-xl px-4 py-2 focus:ring-2 focus:ring-green-500 outline-none text-sm">
                                         <button id="btn-save-gas-url" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-xl shadow-sm transition-colors whitespace-nowrap">
-                                            연결 저장
+                                            로그인 / 서버 변경
                                         </button>
                                     </div>
-                                    <p class="text-xs text-gray-500 mt-2">웹 앱 URL을 등록하면 데이터가 구글 스프레드시트와 자동 동기화됩니다.</p>
+                                    <p class="text-xs text-gray-500 mt-2">서버 인증 후 저장 결과를 확인합니다. 명단은 30초마다 갱신되며 서명·설정 입력 중에는 갱신을 멈춥니다.</p>
                                 </div>
                                 
                                 <div id="gas-test-result" class="hidden text-sm p-3 rounded-lg"></div>
 
                                 <div class="flex flex-wrap gap-2 pt-2">
                                     <button id="btn-force-sync-gas" class="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 py-2 px-4 rounded-xl text-sm font-medium transition-colors">
-                                        <i class="fas fa-cloud-upload-alt mr-1"></i>현재 데이터 강제 업로드
+                                        <i class="fas fa-cloud-upload-alt mr-1"></i>설정 저장
                                     </button>
                                     <button id="btn-fetch-from-gas" class="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 py-2 px-4 rounded-xl text-sm font-medium transition-colors">
                                         <i class="fas fa-cloud-download-alt mr-1"></i>시트에서 명단 불러오기
@@ -496,15 +495,19 @@
                     <i class="fas fa-lock text-2xl text-gray-600"></i>
                 </div>
                 <h3 class="text-xl font-bold text-gray-900">🔒 관리자 모드</h3>
-                <p class="text-sm text-gray-500 mt-1">비밀번호를 입력하세요</p>
+                <p class="text-sm text-gray-500 mt-1">관리자 키는 Google Apps Script에서 발급합니다.</p>
             </div>
             
             <div class="space-y-4">
                 <div>
-                    <input id="input-admin-pw" type="password" placeholder="비밀번호를 입력하세요" class="w-full border border-gray-300 rounded-xl px-4 py-3 text-center text-lg tracking-widest focus:ring-2 focus:ring-brand-500 outline-none">
+                    <label for="input-login-url">Google Apps Script /exec 주소</label>
+                    <input id="input-login-url" type="url" autocomplete="off" class="w-full border rounded px-3 py-2 mb-3" placeholder="https://script.google.com/macros/s/.../exec">
+                    <label for="input-admin-pw">관리자 키 (ADMIN_KEY)</label>
+                    <input id="input-admin-pw" type="password" autocomplete="off" placeholder="발급한 관리자 키" class="w-full border border-gray-300 rounded-xl px-4 py-3 text-center text-lg tracking-widest focus:ring-2 focus:ring-brand-500 outline-none">
                     <div id="admin-pw-error" class="hidden text-red-500 text-xs text-center mt-2">비밀번호가 일치하지 않습니다.</div>
                 </div>
                 <div class="flex gap-3">
+                    <button id="btn-local-mode" type="button" class="py-3 px-2 border rounded">단일 기기 모드</button>
                     <button id="btn-admin-pw-cancel" class="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-colors">취소</button>
                     <button id="btn-admin-pw-submit" class="flex-1 py-3 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium transition-colors">확인</button>
                 </div>
@@ -517,7 +520,7 @@
         <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col">
             <div class="p-6 border-b border-gray-100 flex justify-between items-center">
                 <h3 class="text-xl font-bold text-gray-900">📦 새 연수 묶음 만들기</h3>
-                <button class="text-gray-400 hover:text-gray-600" onclick="document.getElementById('modal-create-bundle').classList.add('hidden')">
+                <button class="text-gray-400 hover:text-gray-600" data-close-modal="modal-create-bundle">
                     <i class="fas fa-times text-xl"></i>
                 </button>
             </div>
@@ -547,7 +550,7 @@
             </div>
 
             <div class="p-6 border-t border-gray-100 flex gap-3 justify-end bg-gray-50 rounded-b-2xl">
-                <button onclick="document.getElementById('modal-create-bundle').classList.add('hidden')" class="px-6 py-2.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-xl font-medium transition-colors">취소</button>
+                <button data-close-modal="modal-create-bundle" class="px-6 py-2.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 rounded-xl font-medium transition-colors">취소</button>
                 <button id="btn-bundle-create-submit" class="px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-medium shadow-sm transition-colors">묶음 생성</button>
             </div>
         </div>
@@ -611,7 +614,7 @@
                     <input type="text" id="input-absent-note" class="w-full border border-gray-300 rounded-xl px-4 py-2 focus:ring-2 focus:ring-brand-500 outline-none" placeholder="상세 사유 입력">
                 </div>
                 <div class="pt-4 flex gap-3">
-                    <button type="button" onclick="document.getElementById('modal-absent-reason').classList.add('hidden')" class="flex-1 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-colors">취소</button>
+                    <button type="button" data-close-modal="modal-absent-reason" class="flex-1 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition-colors">취소</button>
                     <button type="submit" class="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white font-medium py-2 rounded-xl transition-colors">
                         저장
                     </button>
@@ -642,11 +645,46 @@
     </footer>
 
     <!-- SCRIPTS -->
-    <script src="js/pdf-parser.js?v=7"></script>
-    <script src="js/signature-pad.js?v=7"></script>
-    <script src="js/gas-sync.js?v=8"></script>
-    <script src="js/pdf-generator.js?v=7"></script>
-    <script src="js/app.js?v=8"></script>
+    <div id="modal-roster-manager" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+        <div class="roster-dialog bg-white rounded-2xl shadow-lg p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="roster-manager-title" class="text-lg font-bold">기본명단 관리</h3>
+                <button id="btn-roster-close" class="px-3 py-2 border rounded">닫기</button>
+            </div>
+            <div id="roster-template-controls">
+                <div class="flex flex-wrap gap-2 mb-3">
+                    <select id="saved-roster-select" class="border rounded px-3 py-2" aria-label="저장된 기본명단"><option value="">기본명단 선택</option></select>
+                    <button id="btn-roster-open" class="border rounded px-3 py-2">열기 / 수정</button>
+                    <button id="btn-roster-refresh" class="border rounded px-3 py-2">새로고침</button>
+                    <button id="btn-roster-new" class="border rounded px-3 py-2">새 기본명단</button>
+                    <button id="btn-roster-from-bundle" class="border rounded px-3 py-2">현재 연수 명단 복사</button>
+                    <button id="btn-roster-delete" class="border rounded px-3 py-2 text-red-600">기본명단 삭제</button>
+                </div>
+                <p class="text-sm text-gray-500 mb-3">기본명단에는 이름·소속·직급만 저장됩니다. 수정해도 기존 연수의 출석 기록은 바뀌지 않습니다.</p>
+            </div>
+            <label for="roster-editor-name" class="text-sm font-medium">명단 이름</label>
+            <input id="roster-editor-name" maxlength="100" class="w-full border rounded px-3 py-2 mb-3" placeholder="예: 기본명단1">
+            <div class="roster-table-scroll">
+                <table class="roster-editor"><thead><tr><th>소속</th><th>성명</th><th>직급</th><th>관리</th></tr></thead><tbody id="roster-editor-body"></tbody></table>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 mt-3">
+                <span id="roster-editor-count" class="text-sm text-gray-500">0명</span>
+                <button id="btn-roster-add-row" class="px-4 py-2 border rounded">인원 추가</button>
+                <button id="btn-roster-save" class="px-4 py-2 bg-brand-600 text-white rounded">명단 저장</button>
+            </div>
+            <div id="roster-apply-controls" class="flex flex-wrap gap-2 mt-4">
+                <select id="roster-apply-mode" class="px-3 py-2 border rounded" aria-label="연수 명단 적용 방식"><option value="append">기존 인원에 추가</option><option value="replace">이번 연수 명단 전체 교체</option></select>
+                <button id="btn-roster-apply" class="px-4 py-2 bg-gray-800 text-white rounded">이번 연수에 불러오기</button>
+            </div>
+        </div>
+    </div>
+    <script src="js/roster-manager.js?v=10"></script>
+    <script src="js/pdf-parser.js?v=10"></script>
+    <script src="js/signature-pad.js?v=10"></script>
+    <script src="js/gas-sync.js?v=10"></script>
+    <script src="js/pdf-generator.js?v=10"></script>
+    <script src="js/app.js?v=10"></script>
 
 </body>
 </html>
+

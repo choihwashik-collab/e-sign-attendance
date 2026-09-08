@@ -11,12 +11,18 @@ const ListParser = {
    */
   async parsePdf(file) {
     if (!window.pdfjsLib) {
-      throw new Error('PDF.js 라이브러리가 로드되지 않았습니다.');
+      try {
+        window.pdfjsLib = await import('https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.mjs');
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.worker.mjs';
+      } catch (error) {
+        throw new Error('보안 PDF 모듈을 불러오지 못했습니다. 최신 브라우저와 인터넷 연결을 확인하거나 TXT/Excel을 사용하세요.');
+      }
     }
 
     const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
+    const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer, isEvalSupported: false, enableScripting: false });
     const pdf = await loadingTask.promise;
+    if (pdf.numPages > 50) { await pdf.destroy(); throw new Error('PDF는 50페이지 이하로 나눠 주세요.'); }
     
     let fullTextLines = [];
 
@@ -48,6 +54,7 @@ const ListParser = {
       }
     }
 
+    await pdf.destroy();
     return this.parseTextLines(fullTextLines);
   },
 
@@ -256,3 +263,4 @@ const ListParser = {
 };
 
 window.ListParser = ListParser;
+
