@@ -1,4 +1,4 @@
-# Google Apps Script 보안 v9 설정
+# Google Apps Script 보안 v10 설정
 
 전체 절차와 주의사항은 **[보안 재배포 안내](../SECURITY_DEPLOYMENT.md)**를 먼저 읽으세요.
 

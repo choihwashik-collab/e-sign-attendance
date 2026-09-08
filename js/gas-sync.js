@@ -1,10 +1,11 @@
 /** v8 transport: credentials in POST bodies; short-lived random receipts confirm server results. */
 const GasSync = {
+  DEFAULT_SCRIPT_URL:'https://script.google.com/macros/s/AKfycbxC4C0dhdK7T1LvJRdPNE6dyx7qi9glSMDP-BuLcd8liP5wLjFg2mIqPgMI8FdasAMR/exec',
   adminKey: '',
   participant: null,
   scriptUrl: '',
   async initialize() {
-    this.scriptUrl = localStorage.getItem('eSign_server_v8') || '';
+    this.scriptUrl = localStorage.getItem('eSign_server_v8') || this.DEFAULT_SCRIPT_URL;
     if (this.scriptUrl && !this.isValidUrl(this.scriptUrl)) this.scriptUrl = '';
   },
   isValidUrl(url) { return /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url || ''); },
@@ -25,21 +26,25 @@ const GasSync = {
   async testConnection(url = this.getScriptUrl()) {
     if (!this.isValidUrl(url)) return {success:false,message:'연동 주소가 없습니다.'};
     const result = await this._jsonpRequest(url,{action:'ping'});
-    const success = result?.success && result.apiVersion === 9;
+    const success = result?.success && result.apiVersion === 10;
     return {success:!!success,message:success?'서버 연결 확인':'서버 업데이트 또는 연결 확인이 필요합니다.'};
   },
   async login(key) {
     if (typeof key !== 'string' || key.length < 32) throw new Error('스크립트 속성의 관리자 키(32자 이상)를 입력하세요.');
     if (!(await this.testConnection()).success) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
     const result = await this._post({action:'login'},key);
-    if (result.apiVersion !== 9) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
+    if (result.apiVersion !== 10) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
     this.adminKey = key;
     this.participant = null;
     return result;
   },
   logout() { this.adminKey=''; this.participant=null; },
   async fetchBundles() { return (await this._post({action:'listBundles'})).bundles; },
-  async fetchBundle(bundleId) { return (await this._post({action:'getBundle',bundleId})).bundle; },
+  async fetchPublicBundles() { const r=await this._jsonpRequest(this.getScriptUrl(),{action:'listPublicBundles'});if(!r?.success)throw new Error('공개 연수 목록을 불러오지 못했습니다.');return r.bundles; },
+  async fetchBundle(bundleId) {
+    if(!this.adminKey&&!this.participant){const r=await this._jsonpRequest(this.getScriptUrl(),{action:'getPublicBundle',bundleId});if(!r?.success)throw new Error(r?.message||'연수를 불러오지 못했습니다.');return r.bundle;}
+    return (await this._post({action:'getBundle',bundleId})).bundle;
+  },
   async syncBundle(bundle) {
     return this._post({action:'initBundle',bundle,expectedRevision:bundle.revision});
   },
@@ -67,7 +72,7 @@ const GasSync = {
     const body = {...payload,requestId};
     if (loginKey || this.adminKey) body.adminKey=loginKey || this.adminKey;
     else if (this.participant?.bundleId === payload.bundleId) body.token=this.participant.token;
-    else throw new Error('진행자 로그인 또는 유효한 초대 링크가 필요합니다.');
+    else if(payload.action!=='submitSignature'&&payload.action!=='submitReason') throw new Error('진행자 로그인 또는 유효한 초대 링크가 필요합니다.');
     const controller = new AbortController();
     const timer = setTimeout(()=>controller.abort(),45000);
     try {

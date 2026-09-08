@@ -13,7 +13,7 @@ const PdfGenerator = {
     if (att.status === '공가') return { text: '공가', isSpecial: true };
     if (att.status === '병가') return { text: '병가', isSpecial: true };
     if (att.status === '조퇴') return { text: '조퇴', isSpecial: true };
-    if (att.status && att.status !== '출석' && att.status !== '서명완료') {
+    if (att.status && !['출석','서명완료','미서명'].includes(att.status)) {
       return { text: att.status, isSpecial: true };
     }
     if (att.isSigned && att.signatureData) {

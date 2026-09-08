@@ -91,6 +91,17 @@ test('participant sees only current bundle roster, not signatures or private not
   }
   assert.equal(s.request({action:'getBundle',bundleId:'another_bundle',token:s.token}).success,false);
 });
+test('public directory exposes only participant-safe data and closes with reception',()=>{
+  const s=prepare();
+  const list=JSON.parse(s.context.doGet({parameter:{action:'listPublicBundles'}}).body);
+  assert.equal(list.bundles.length,1);assert.equal(list.bundles[0].attendees.length,0);
+  const view=JSON.parse(s.context.doGet({parameter:{action:'getPublicBundle',bundleId:'bundle_test'}}).body).bundle;
+  assert.equal(view.attendees[0].name,'테스트');assert.equal(view.attendees[0].note,undefined);assert.equal(view.attendees[0].signatureData,undefined);
+  const signed=s.request({action:'submitSignature',bundleId:'bundle_test',attendeeId:'att_1',signatureData:PNG});assert.equal(signed.success,true);
+  assert.equal(s.request({action:'closeSharing',bundleId:'bundle_test',adminKey:KEY}).success,true);
+  assert.equal(JSON.parse(s.context.doGet({parameter:{action:'listPublicBundles'}}).body).bundles.length,0);
+  assert.equal(s.request({action:'submitReason',bundleId:'bundle_test',attendeeId:'att_1',status:'출장',expectedSignedAt:signed.signedAt}).success,false);
+});
 test('invitation expiry, rotation and closing all revoke access',()=>{
   const s=prepare();
   const renewed=s.request({action:'shareBundle',bundleId:'bundle_test',adminKey:KEY});
@@ -185,8 +196,8 @@ function client() {
   for(const f of ['js/gas-sync.js','js/pdf-generator.js','js/app.js'])vm.runInContext(source(f),context);
   return {context,elements,storage,intervals,app:context.window.App,gas:context.window.GasSync,run:s=>vm.runInContext(s,context)};
 }
-test('blank server means disconnected; arbitrary/shared query URLs rejected',async()=>{
-  const c=client();await c.gas.initialize();assert.equal(c.gas.getScriptUrl(),'');
+test('public server default is fixed; arbitrary/shared query URLs rejected',async()=>{
+  const c=client();await c.gas.initialize();assert.match(c.gas.getScriptUrl(),/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/);
   for(const url of ['https://evil.example/exec','https://script.google.com.evil.example/macros/s/a/exec','https://script.google.com/macros/s/a/exec?x=1','javascript:alert(1)'])assert.throws(()=>c.gas.setScriptUrl(url));
   c.gas.setScriptUrl('https://script.google.com/macros/s/test/exec');c.gas.adminKey=KEY;c.gas.setScriptUrl('');assert.equal(c.gas.getScriptUrl(),'');assert.equal(c.gas.adminKey,'');
 });
@@ -203,6 +214,7 @@ test('transport reads server acknowledgement, not opaque success; key never ente
 });
 test('no automatic remote writes at startup, and local data stays untouched',async()=>{
   const c=client();c.storage.set('eSign_bundles','[{"id":"old"}]');
+  c.gas.fetchPublicBundles=async()=>[];
   c.gas.fetchBundles=()=>{throw Error('Unexpected remote fetch');};
   await c.app.init();assert.equal(c.storage.get('eSign_bundles'),'[{"id":"old"}]');
 });

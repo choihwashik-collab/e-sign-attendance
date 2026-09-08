@@ -32,7 +32,7 @@ const App = {
     } else if(new URLSearchParams(location.search).has('bundle')) {
       this.message('기존 공유 링크는 사용할 수 없습니다. 진행자에게 보안 버전의 새 QR을 요청하세요.',true);
     } else {
-    this.message('관리자 로그인 후 연수를 선택하세요.');
+      await this.perform(async()=>{AppState.bundles=await GasSync.fetchPublicBundles();this.renderBundleList();this.message('참석할 연수를 선택하세요.');});
     }
   },
   message(text,error=false) {
@@ -163,6 +163,7 @@ const App = {
     }
     document.getElementById('btn-open-add-attendee').classList.toggle('hidden',!AppState.isAdminAuthenticated);
     document.getElementById('btn-create-bundle').classList.toggle('hidden',!AppState.isAdminAuthenticated);
+    document.getElementById('btn-basic-rosters-home').classList.toggle('hidden',!AppState.isAdminAuthenticated);
     if(view==='home')this.renderBundleList();
     if(view==='participant')this.renderParticipantView();
     if(view==='admin'&&AppState.currentBundle){this.renderAdminOverview();this.renderPdfPreview();this.renderAdminQrCode();}
@@ -217,8 +218,8 @@ const App = {
         </div>
         <div class="bg-gray-50 p-4 border-t border-gray-200 flex justify-end gap-2">
           <button class="btn-open-bundle px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm" data-id="${escapeHtml(bundle.id)}">열기</button>
-          <button class="btn-manage-bundle px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm" data-id="${escapeHtml(bundle.id)}">관리</button>
-          <button class="btn-delete-bundle px-4 py-2 bg-red-100 text-red-600 rounded hover:bg-red-200 text-sm" data-id="${escapeHtml(bundle.id)}">삭제</button>
+          ${AppState.isAdminAuthenticated?`<button class="btn-manage-bundle px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm" data-id="${escapeHtml(bundle.id)}">관리</button>
+          <button class="btn-delete-bundle px-4 py-2 bg-red-100 text-red-600 rounded hover:bg-red-200 text-sm" data-id="${escapeHtml(bundle.id)}">삭제</button>`:''}
         </div>
       `;
       container.appendChild(card);

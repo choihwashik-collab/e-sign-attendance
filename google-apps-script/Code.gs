@@ -2,11 +2,21 @@
 var REGISTRY_SHEET = '_eSignBundles';
 var ATTENDANCE_HEADERS = ['참석자ID', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '서명시각'];
 var REGISTRY_HEADERS = ['묶음ID', '묶음명', '생성일', '연수목록JSON', '장소', '주관', '확인부서', '확인자', '결재란표시', '결재단계JSON', '출석시트ID'];
-var API_VERSION = 9;
+var API_VERSION = 10;
 
 function doGet(e) {
   var p = e && e.parameter || {};
   if (p.action === 'ping') return jsonResponse({success:true, apiVersion:API_VERSION}, p.callback);
+  if (p.action === 'listPublicBundles') {
+    var visible=listBundles_().filter(function(b){return isPublicOpen_(b.id);}).map(function(b){
+      return {id:b.id,name:b.name,sessions:b.sessions,createdAt:b.createdAt,attendees:[],summary:true};
+    });
+    return jsonResponse({success:true,bundles:visible},p.callback);
+  }
+  if (p.action === 'getPublicBundle' && /^[a-zA-Z0-9_-]{1,100}$/.test(p.bundleId || '') && isPublicOpen_(p.bundleId)) {
+    var publicBundle=readBundle_(p.bundleId);
+    return jsonResponse(publicBundle?{success:true,bundle:bundleView_(publicBundle,false)}:{success:false,message:'연수를 찾을 수 없습니다.'},p.callback);
+  }
   // Only an unguessable, short-lived receipt capability is accepted in a URL.
   // Administrator/invitation credentials are sent in POST bodies, never query strings.
   if (p.action === 'receipt' && /^[a-f0-9]{64}$/.test(p.requestId || '')) {
@@ -24,9 +34,11 @@ function doPost(e) {
     p = JSON.parse(e.postData.contents);
     if (!/^[a-f0-9]{64}$/.test(p.requestId || '')) throw new Error('잘못된 요청 번호입니다.');
     var admin = isAdmin_(p.adminKey);
-    if (!admin) requireInvitation_(p.bundleId, p.token);
+    var publicParticipant=(p.action==='submitSignature'||p.action==='submitReason') && isPublicOpen_(p.bundleId);
+    if (!admin && !publicParticipant) requireInvitation_(p.bundleId, p.token);
     lock.waitLock(20000); locked = true;
-    if (!admin) requireInvitation_(p.bundleId, p.token); // Recheck expiry/revocation after lock acquisition.
+    if (!admin && !publicParticipant) requireInvitation_(p.bundleId, p.token); // Recheck expiry/revocation after lock acquisition.
+    if (publicParticipant && !isPublicOpen_(p.bundleId)) throw new Error('이 연수의 접수가 종료되었습니다.');
     // Retries with the same request number cannot repeat a mutation during receipt lifetime.
     var cached = CacheService.getScriptCache().get('r:' + p.requestId + ':meta');
     if (cached) return jsonResponse({accepted:true});
@@ -60,6 +72,9 @@ function control_(id) {
 }
 function setControl_(id, value) {
   PropertiesService.getScriptProperties().setProperty('bundle_' + id, JSON.stringify(value));
+}
+function isPublicOpen_(id) {
+  return /^[a-zA-Z0-9_-]{1,100}$/.test(id || '') && control_(id).publicClosed !== true;
 }
 function requireInvitation_(id, token) {
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '') || typeof token !== 'string' || token.length !== 64) throw new Error('관리자 인증 또는 유효한 초대 링크가 필요합니다.');
@@ -125,9 +140,9 @@ function dispatch_(p, admin) {
   if (p.action === 'shareBundle' || p.action === 'closeSharing') {
     if (!admin) throw new Error('관리자 전용 요청입니다.');
     var c = control_(id);
-    if (p.action === 'closeSharing') { delete c.tokenHash; c.expiresAt=0; setControl_(id,c); return {success:true}; }
+    if (p.action === 'closeSharing') { delete c.tokenHash; c.expiresAt=0; c.publicClosed=true; setControl_(id,c); return {success:true}; }
     var token = Utilities.getUuid().replace(/-/g,'') + Utilities.getUuid().replace(/-/g,'');
-    c.tokenHash=hash_(token); c.expiresAt=Date.now()+24*60*60*1000; setControl_(id,c);
+    c.tokenHash=hash_(token); c.expiresAt=Date.now()+24*60*60*1000; c.publicClosed=false; setControl_(id,c);
     return {success:true,token:token,expiresAt:c.expiresAt};
   }
   if (p.action === 'deleteBundle') {
