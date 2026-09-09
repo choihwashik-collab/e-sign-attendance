@@ -1,4 +1,4 @@
-# 보안 변경 및 운영 전 필수 작업 (v10)
+# 보안 변경 및 운영 전 필수 작업 (v11)
 
 ## 현재 상태
 
@@ -101,4 +101,3 @@
 CSS 수정 후 재생성: `npx --yes tailwindcss@3.4.17 -i ./css/tailwind-input.css -o ./css/tailwind.css --minify`
 
 라이브러리 참고: [PDF.js 보안 공지](https://github.com/mozilla/pdf.js/security/advisories/GHSA-hq66-cqwq-w95j), [SheetJS 설치 안내](https://docs.sheetjs.com/docs/getting-started/installation/standalone/), [jsPDF 릴리스](https://github.com/parallax/jsPDF/releases/tag/v4.2.1).
-

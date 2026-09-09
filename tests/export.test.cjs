@@ -25,4 +25,17 @@ test('Excel roundtrip embeds PNG and leaves absence signature blank, including f
   assert.ok(!sheet.getCell('E5').value);assert.equal(sheet.getCell('F5').value,'출장: 교육청');
   assert.equal(sheet.getImages()[0].range.tl.nativeRow,3);
 });
-
+test('downloadable basic roster template has the requested columns and numbered blank rows',async()=>{
+  const response=await fetch('https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js'),code=await response.text();
+  const context=vm.createContext({console,Uint8Array,ArrayBuffer,TextDecoder,TextEncoder});vm.runInContext(code,context);
+  const workbook=context.XLSX.read(fs.readFileSync('outputs/basic-roster-template.xlsx'),{type:'buffer'});
+  const rows=context.XLSX.utils.sheet_to_json(workbook.Sheets['기본명단'],{header:1});
+  assert.deepEqual(Array.from(rows[0]),['연번','소속','직급','성명']);
+  assert.equal(rows[1][0],1);assert.equal(rows[1][3],'');
+  workbook.Sheets['기본명단'].B2.v='교무부';workbook.Sheets['기본명단'].C2.v='교사';workbook.Sheets['기본명단'].D2.v='가상인물';
+  const bytes=context.XLSX.write(workbook,{type:'array',bookType:'xlsx'});context.window={XLSX:context.XLSX};
+  vm.runInContext(fs.readFileSync('js/pdf-parser.js','utf8'),context);
+  const uploadBuffer=await new Blob([Buffer.from(bytes)]).arrayBuffer();
+  const parsed=await context.window.ListParser.parseExcel({arrayBuffer:async()=>uploadBuffer});
+  assert.equal(parsed.length,1);assert.deepEqual([parsed[0].department,parsed[0].position,parsed[0].name],['교무부','교사','가상인물']);
+});

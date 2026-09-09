@@ -74,7 +74,7 @@ test('anonymous legacy read and write routes fail closed',()=>{
   assert.equal(s.ss.getSheets().length,1);
 });
 test('administrator key must be configured, strong and match',()=>{
-  const s=server();assert.equal(s.request({action:'login',adminKey:KEY}).success,true);
+  const s=server(),login=s.request({action:'login',adminKey:KEY});assert.equal(login.success,true);assert.ok(Array.isArray(login.bundles));
   assert.equal(s.request({action:'login',adminKey:'2026'}).success,false);
   s.props.set('ADMIN_KEY','short');
   assert.equal(s.request({action:'login',adminKey:'short'}).success,false);
@@ -256,4 +256,9 @@ test('local quota error is surfaced rather than silently reporting success',()=>
   assert.throws(()=>c.app.acceptBundle(bundle()),/quota exceeded/);
   assert.equal(c.run('AppState.bundles.length'),0);
 });
-
+test('busy indicator is immediate and repeated actions are ignored',async()=>{
+  const c=client();let finish;const pending=c.app.perform(()=>new Promise(resolve=>finish=resolve));
+  assert.equal(c.elements.get('busy-indicator').hidden,false);
+  assert.equal(await c.app.perform(()=>{throw Error('must not run');}),undefined);
+  finish('ok');assert.equal(await pending,'ok');assert.equal(c.elements.get('busy-indicator').hidden,true);
+});

@@ -2,15 +2,13 @@
 var REGISTRY_SHEET = '_eSignBundles';
 var ATTENDANCE_HEADERS = ['참석자ID', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '서명시각'];
 var REGISTRY_HEADERS = ['묶음ID', '묶음명', '생성일', '연수목록JSON', '장소', '주관', '확인부서', '확인자', '결재란표시', '결재단계JSON', '출석시트ID'];
-var API_VERSION = 10;
+var API_VERSION = 11;
 
 function doGet(e) {
   var p = e && e.parameter || {};
   if (p.action === 'ping') return jsonResponse({success:true, apiVersion:API_VERSION}, p.callback);
   if (p.action === 'listPublicBundles') {
-    var visible=listBundles_().filter(function(b){return isPublicOpen_(b.id);}).map(function(b){
-      return {id:b.id,name:b.name,sessions:b.sessions,createdAt:b.createdAt,attendees:[],summary:true};
-    });
+    var visible=listBundleSummaries_().filter(function(b){return isPublicOpen_(b.id);});
     return jsonResponse({success:true,bundles:visible},p.callback);
   }
   if (p.action === 'getPublicBundle' && /^[a-zA-Z0-9_-]{1,100}$/.test(p.bundleId || '') && isPublicOpen_(p.bundleId)) {
@@ -105,13 +103,11 @@ function dispatch_(p, admin) {
   }
   if (p.action === 'login') {
     if (!admin) throw new Error('관리자 키가 올바르지 않습니다.');
-    return {success:true, apiVersion:API_VERSION};
+    return {success:true, apiVersion:API_VERSION, bundles:listBundleSummaries_()};
   }
   if (p.action === 'listBundles') {
     if (!admin) throw new Error('관리자 전용 요청입니다.');
-    return {success:true, bundles:listBundles_().map(function(b){
-      return {id:b.id,name:b.name,sessions:b.sessions,createdAt:b.createdAt,attendees:[],revision:control_(b.id).revision || 0,summary:true};
-    })};
+    return {success:true, bundles:listBundleSummaries_()};
   }
   var id = p.bundleId || (p.bundle && p.bundle.id);
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '')) throw new Error('묶음 ID가 올바르지 않습니다.');
@@ -373,6 +369,16 @@ function listBundles_() {
   return bundles;
 }
 
+// The home screen needs registry metadata only. Avoid opening every attendance sheet.
+function listBundleSummaries_() {
+  var registry=getRegistry_(SpreadsheetApp.getActiveSpreadsheet());
+  if(registry.getLastRow()<2)return [];
+  var rows=registry.getRange(2,1,registry.getLastRow()-1,REGISTRY_HEADERS.length).getValues();
+  return rows.filter(function(r){return !!r[0];}).map(function(r){
+    return {id:String(r[0]),name:String(r[1]||''),createdAt:dateString_(r[2]),sessions:parseJson_(r[3],[]),attendees:[],revision:control_(String(r[0])).revision||0,summary:true};
+  }).sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+}
+
 function deleteBundle_(bundleId) {
   if (!bundleId) throw new Error('삭제할 묶음 ID가 없습니다.');
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -464,4 +470,3 @@ function setupCleanupTrigger() {
 function parseJson_(value, fallback) { try { return JSON.parse(value || ''); } catch (e) { return fallback; } }
 function dateString_(value) { return value instanceof Date ? value.toISOString() : (value ? String(value) : null); }
 function newId_(prefix) { return prefix + '_' + new Date().getTime() + '_' + Math.floor(Math.random() * 100000); }
-

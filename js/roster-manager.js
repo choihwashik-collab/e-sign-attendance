@@ -13,9 +13,13 @@ const RosterManager = {
     App.requireAdmin();
     this.rosters=App.localMode?JSON.parse(localStorage.getItem('eSign_basicRosters')||'[]'):await GasSync.listRosters();
     if(!Array.isArray(this.rosters))throw new Error('기본명단을 불러오지 못했습니다.');
+    this.renderRosterSelect();
+  },
+  renderRosterSelect(selectedId='') {
     const select=document.getElementById('saved-roster-select');select.replaceChildren();
     const empty=document.createElement('option');empty.value='';empty.textContent='기본명단 선택';select.appendChild(empty);
     for(const roster of this.rosters){const option=document.createElement('option');option.value=roster.id;option.textContent=roster.name+' ('+roster.attendees.length+'명)';select.appendChild(option);}
+    if(selectedId)select.value=selectedId;
   },
   async open(target='template') {
     App.requireAdmin();
@@ -78,7 +82,7 @@ const RosterManager = {
         saved={...roster,revision:(roster.revision||0)+1};
         localStorage.setItem('eSign_basicRosters',JSON.stringify(this.rosters.filter(r=>r.id!==saved.id).concat(saved)));
       } else saved=(await GasSync.saveRoster(roster)).roster;
-      this.draft=saved;await this.refresh();document.getElementById('saved-roster-select').value=saved.id;
+      this.draft=saved;this.rosters=this.rosters.filter(r=>r.id!==saved.id).concat(saved);this.renderRosterSelect(saved.id);
     }
     this.dirty=false;this.render();App.message(this.target==='bundle'?'이번 연수 명단을 저장했습니다.':'기본명단을 저장했습니다. 이미 진행 중인 연수에는 영향을 주지 않습니다.');
   },
@@ -87,6 +91,19 @@ const RosterManager = {
     const roster=this.rosters.find(r=>r.id===document.getElementById('saved-roster-select').value);
     if(!roster)throw new Error('기본명단을 선택하세요.');
     this.draft=JSON.parse(JSON.stringify(roster));this.dirty=false;this.render();
+  },
+  async importFile(file) {
+    App.requireAdmin();
+    const parsed=await App.parseRosterFile(file);
+    if(!parsed.length)throw new Error('Excel에서 명단을 찾지 못했습니다. 첫 행을 연번, 소속, 직급, 성명으로 작성하세요.');
+    const people=this.people(parsed);
+    const replace=document.getElementById('basic-roster-import-mode').value==='replace';
+    if(replace&&this.draft.attendees.length&&!confirm('현재 편집 중인 기본명단을 Excel 내용으로 교체할까요? 저장 전까지 서버에는 반영되지 않습니다.'))return;
+    const next=replace?people:this.draft.attendees.concat(people);
+    if(next.length>200)throw new Error('기본명단은 최대 200명입니다. 파일을 나눠 주세요.');
+    this.draft.attendees=next;
+    this.markDirty();this.render();
+    App.message(people.length+'명을 기본명단 편집기에 불러왔습니다. 내용을 확인한 뒤 [명단 저장]을 누르세요.');
   },
   async apply() {
     App.requireAdmin();
@@ -130,9 +147,10 @@ const RosterManager = {
       this.markDirty();this.render();
     });
     on('btn-roster-save',()=>this.save());on('btn-roster-apply',()=>this.apply());on('btn-roster-delete',()=>this.remove());
+    on('btn-basic-roster-upload',()=>document.getElementById('basic-roster-file-input').click());
+    document.getElementById('basic-roster-file-input').addEventListener('change',e=>App.perform(async()=>{const file=e.target.files[0];e.target.value='';await this.importFile(file);}));
     document.getElementById('btn-roster-close').addEventListener('click',()=>{if(!App.busy)this.close();});
     document.getElementById('roster-editor-name').addEventListener('input',()=>{this.draft.name=document.getElementById('roster-editor-name').value;this.markDirty();});
   }
 };
 window.RosterManager=RosterManager;
-

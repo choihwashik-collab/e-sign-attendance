@@ -26,14 +26,13 @@ const GasSync = {
   async testConnection(url = this.getScriptUrl()) {
     if (!this.isValidUrl(url)) return {success:false,message:'연동 주소가 없습니다.'};
     const result = await this._jsonpRequest(url,{action:'ping'});
-    const success = result?.success && result.apiVersion === 10;
+    const success = result?.success && result.apiVersion === 11;
     return {success:!!success,message:success?'서버 연결 확인':'서버 업데이트 또는 연결 확인이 필요합니다.'};
   },
   async login(key) {
     if (typeof key !== 'string' || key.length < 32) throw new Error('스크립트 속성의 관리자 키(32자 이상)를 입력하세요.');
-    if (!(await this.testConnection()).success) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
     const result = await this._post({action:'login'},key);
-    if (result.apiVersion !== 10) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
+    if (result.apiVersion !== 11) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
     this.adminKey = key;
     this.participant = null;
     return result;
@@ -118,4 +117,3 @@ const GasSync = {
   }
 };
 window.GasSync=GasSync;
-

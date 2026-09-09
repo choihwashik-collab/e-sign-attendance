@@ -41,10 +41,15 @@ const App = {
   },
   async perform(work) {
     if(this.busy){this.message('앞선 작업을 처리 중입니다. 잠시 기다려 주세요.');return;}
-    this.busy=true;
+    this.busy=true;this.setBusy(true);
     try {return await work();}
     catch(e){this.message(e.message || '처리하지 못했습니다.',true);return false;}
-    finally {this.busy=false;}
+    finally {this.busy=false;this.setBusy(false);}
+  },
+  setBusy(active) {
+    document.body.classList.toggle('app-busy',active);
+    document.body.setAttribute?.('aria-busy',String(active));
+    const indicator=document.getElementById('busy-indicator');if(indicator)indicator.hidden=!active;
   },
   requireAdmin() {
     if(!AppState.isAdminAuthenticated){this.showAdminPasswordModal();throw new Error('진행자 로그인이 필요합니다.');}
@@ -59,8 +64,8 @@ const App = {
     const url=document.getElementById('input-login-url').value.trim();
     const key=document.getElementById('input-admin-pw').value.trim();
     GasSync.setScriptUrl(url);
-    await GasSync.login(key);
-    const bundles=await GasSync.fetchBundles();
+    const login=await GasSync.login(key);
+    const bundles=Array.isArray(login.bundles)?login.bundles:await GasSync.fetchBundles();
     this.localMode=false;AppState.isAdminAuthenticated=true;AppState.bundles=bundles;AppState.currentBundle=null;
     document.getElementById('input-admin-pw').value='';
     document.getElementById('modal-admin-password').classList.add('hidden');
@@ -626,16 +631,20 @@ const App = {
   },
   async handleRosterFile(file) {
     this.requireAdmin();
+    const result=await this.parseRosterFile(file);
+    await this.appendOrReplaceAttendees(result);
+  },
+  async parseRosterFile(file) {
     if(!file)return;
     if(file.size>5*1024*1024)throw new Error('명단 파일은 5MB 이하로 나눠 주세요.');
-    this.message('명단 파일을 분석 중입니다.');
+    this.message('명단 파일을 분석 중입니다. 잠시 기다려 주세요.');
     const ext=file.name.split('.').pop().toLowerCase();
     let result;
     if(ext==='pdf')result=await ListParser.parsePdf(file);
     else if(['xlsx','xls','csv'].includes(ext))result=await ListParser.parseExcel(file);
     else if(ext==='txt')result=ListParser.parseTextLines(await file.text());
     else throw new Error('PDF, Excel, CSV, TXT 파일만 지원합니다.');
-    await this.appendOrReplaceAttendees(result);
+    return result;
   },
   async appendOrReplaceAttendees(parsed) {
     this.requireAdmin();
@@ -800,4 +809,3 @@ const App = {
 };
 window.App=App;
 document.addEventListener('DOMContentLoaded',()=>App.init().catch(e=>App.message(e.message,true)));
-

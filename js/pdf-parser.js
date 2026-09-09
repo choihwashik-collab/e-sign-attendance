@@ -126,7 +126,7 @@ const ListParser = {
           id: 'att_' + Math.random().toString(36).substr(2, 9),
           department: currentDept || '미지정',
           name: name.replace(/\s+/g, ''),
-          position: pos || '참석자',
+          position: pos || '',
           isSigned: false,
           signatureData: null,
           signedAt: null
@@ -263,4 +263,3 @@ const ListParser = {
 };
 
 window.ListParser = ListParser;
-
