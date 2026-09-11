@@ -19,6 +19,7 @@
 .roster-editor input { width: 100%; min-width: 70px; border: 1px solid #d1d5db; border-radius: 6px; padding: 8px; }
 .roster-editor th { background: #f9fafb; position: sticky; top: 0; }
 .roster-editor button { color: #dc2626; white-space: nowrap; }
+.file-drag-active { background: #dcfce7 !important; border-color: #15803d !important; box-shadow: 0 0 0 3px rgba(21,128,61,.18); }
 
 body {
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;

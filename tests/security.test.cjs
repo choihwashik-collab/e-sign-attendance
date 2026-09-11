@@ -66,6 +66,8 @@ test('source syntax and no inline executable markup',()=>{
   assert.doesNotMatch(html,/<script\s*>/i);
   assert.match(html,/Content-Security-Policy/);
   assert.doesNotMatch(html,/pdf.js\/3\.11|xlsx@0\.18|jspdf\/2\.5/);
+  const dropMarkup=html.slice(html.indexOf('id="roster-drop-zone"'),html.indexOf('</div>',html.indexOf('id="roster-drop-zone"')));
+  assert.doesNotMatch(dropMarkup,/id="roster-file-input"/);
 });
 test('anonymous legacy read and write routes fail closed',()=>{
   const s=server();
@@ -261,4 +263,25 @@ test('busy indicator is immediate and repeated actions are ignored',async()=>{
   assert.equal(c.elements.get('busy-indicator').hidden,false);
   assert.equal(await c.app.perform(()=>{throw Error('must not run');}),undefined);
   finish('ok');assert.equal(await pending,'ok');assert.equal(c.elements.get('busy-indicator').hidden,true);
+});
+test('file uploads use one native picker and support drop in both roster screens',async()=>{
+  const app=source('js/app.js'),manager=source('js/roster-manager.js'),html=source('index.html');
+  assert.match(app,/bindFileUpload\(\{inputId:'roster-file-input',dropZoneId:'roster-drop-zone'/);
+  assert.match(manager,/bindFileUpload\(\{inputId:'basic-roster-file-input',triggerId:'btn-basic-roster-upload',dropZoneId:'basic-roster-drop-zone'/);
+  assert.doesNotMatch(manager,/on\('btn-basic-roster-upload'/);
+  assert.match(html,/id="basic-roster-drop-zone"/);
+  assert.match(html,/또는 Excel 파일을 이 영역에 놓으세요/);
+  const c=client(),listeners={};let pickerClicks=0,processed=[];
+  const input={value:'old',files:[],click(){pickerClicks++;},addEventListener(type,fn){listeners.inputChange=fn;}};
+  const trigger={addEventListener(type,fn){listeners.triggerClick=fn;}};
+  const drop={classList:{add(){},remove(){}},contains(){return false;},addEventListener(type,fn){listeners['drop_'+type]=fn;}};
+  c.elements.set('test-input',input);c.elements.set('test-trigger',trigger);c.elements.set('test-drop',drop);
+  c.app.bindFileUpload({inputId:'test-input',triggerId:'test-trigger',dropZoneId:'test-drop',onFile:file=>processed.push(file.name)});
+  const event={preventDefault(){},stopPropagation(){}};
+  listeners.triggerClick(event);assert.equal(pickerClicks,1);
+  listeners.inputChange({target:{files:[{name:'first.xlsx'}],value:'selected'}});
+  await new Promise(resolve=>setImmediate(resolve));
+  listeners.drop_drop({...event,dataTransfer:{files:[{name:'second.xlsx'}]}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(processed,['first.xlsx','second.xlsx']);
 });

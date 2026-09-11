@@ -147,8 +147,7 @@ const RosterManager = {
       this.markDirty();this.render();
     });
     on('btn-roster-save',()=>this.save());on('btn-roster-apply',()=>this.apply());on('btn-roster-delete',()=>this.remove());
-    on('btn-basic-roster-upload',()=>document.getElementById('basic-roster-file-input').click());
-    document.getElementById('basic-roster-file-input').addEventListener('change',e=>App.perform(async()=>{const file=e.target.files[0];e.target.value='';await this.importFile(file);}));
+    App.bindFileUpload({inputId:'basic-roster-file-input',triggerId:'btn-basic-roster-upload',dropZoneId:'basic-roster-drop-zone',onFile:file=>this.importFile(file)});
     document.getElementById('btn-roster-close').addEventListener('click',()=>{if(!App.busy)this.close();});
     document.getElementById('roster-editor-name').addEventListener('input',()=>{this.draft.name=document.getElementById('roster-editor-name').value;this.markDirty();});
   }

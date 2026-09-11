@@ -51,6 +51,24 @@ const App = {
     document.body.setAttribute?.('aria-busy',String(active));
     const indicator=document.getElementById('busy-indicator');if(indicator)indicator.hidden=!active;
   },
+  bindFileUpload({inputId,triggerId,dropZoneId,onFile}) {
+    const input=document.getElementById(inputId),trigger=triggerId?document.getElementById(triggerId):null,drop=dropZoneId?document.getElementById(dropZoneId):null;
+    if(!input)return;
+    const choose=()=>{if(!this.busy)input.click();};
+    const process=file=>{if(file)this.perform(()=>onFile(file));};
+    input.addEventListener('change',e=>{const file=e.target.files?.[0];e.target.value='';process(file);});
+    trigger?.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();choose();});
+    if(!drop)return;
+    if(!trigger){
+      drop.addEventListener('click',e=>{e.preventDefault();choose();});
+      drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();choose();}});
+    }
+    const cancel=e=>{e.preventDefault();e.stopPropagation();};
+    drop.addEventListener('dragenter',e=>{cancel(e);drop.classList.add('file-drag-active');});
+    drop.addEventListener('dragover',e=>{cancel(e);drop.classList.add('file-drag-active');if(e.dataTransfer)e.dataTransfer.dropEffect='copy';});
+    drop.addEventListener('dragleave',e=>{cancel(e);if(!drop.contains(e.relatedTarget))drop.classList.remove('file-drag-active');});
+    drop.addEventListener('drop',e=>{cancel(e);drop.classList.remove('file-drag-active');process(e.dataTransfer?.files?.[0]);});
+  },
   requireAdmin() {
     if(!AppState.isAdminAuthenticated){this.showAdminPasswordModal();throw new Error('진행자 로그인이 필요합니다.');}
   },
@@ -790,11 +808,7 @@ const App = {
     on('btn-open-fullscreen-qr','click',()=>{this.renderLargeQrCode();document.getElementById('modal-fullscreen-qr').classList.remove('hidden');});
     on('btn-close-qr-modal','click',()=>document.getElementById('modal-fullscreen-qr').classList.add('hidden'),false);
     on('btn-parse-text-roster','click',()=>this.appendOrReplaceAttendees(ListParser.parseTextLines(document.getElementById('textarea-roster-paste').value)));
-    on('roster-file-input','change',e=>this.handleRosterFile(e.target.files[0]));
-    on('roster-drop-zone','click',()=>document.getElementById('roster-file-input').click(),false);
-    const drop=document.getElementById('roster-drop-zone');
-    drop.addEventListener('dragover',e=>e.preventDefault());
-    drop.addEventListener('drop',e=>{e.preventDefault();this.perform(()=>this.handleRosterFile(e.dataTransfer.files[0]));});
+    this.bindFileUpload({inputId:'roster-file-input',dropZoneId:'roster-drop-zone',onFile:file=>this.handleRosterFile(file)});
     on('btn-download-pdf','click',async()=>{this.requireAdmin();if(!AppState.currentBundle)throw new Error('연수를 선택하세요.');await PdfGenerator.downloadAllSessionPdfs(AppState.currentBundle);});
     on('btn-print-doc','click',()=>{this.requireAdmin();this.renderPdfPreview();window.print();});
     on('btn-export-excel','click',async()=>{this.requireAdmin();if(AppState.currentBundle){if(!this.localMode)await this.syncFromGoogleSheet(false);await PdfGenerator.exportToExcel(AppState.currentBundle,AppState.currentBundle.attendees);this.message('서명 그림을 포함한 Excel 파일을 저장했습니다.');}});
