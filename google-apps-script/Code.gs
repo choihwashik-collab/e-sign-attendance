@@ -2,9 +2,12 @@
 var REGISTRY_SHEET = '_eSignBundles';
 var ATTENDANCE_HEADERS = ['참석자ID', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '서명시각'];
 var REGISTRY_HEADERS = ['묶음ID', '묶음명', '생성일', '연수목록JSON', '장소', '주관', '확인부서', '확인자', '결재란표시', '결재단계JSON', '출석시트ID'];
-var API_VERSION = 13;
+var API_VERSION = 14;
 
 function doGet(e) {
+  try {return getResponse_(e);} catch(error) {return jsonResponse({success:false,message:'연수 정보를 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'},e&&e.parameter&&e.parameter.callback);}
+}
+function getResponse_(e) {
   var p = e && e.parameter || {};
   if (p.action === 'ping') return jsonResponse({success:true, apiVersion:API_VERSION}, p.callback);
   if (p.action === 'listPublicBundles') {
@@ -12,9 +15,16 @@ function doGet(e) {
     return jsonResponse({success:true,bundles:visible},p.callback);
   }
   if (p.action === 'getPublicBundle' && /^[a-zA-Z0-9_-]{1,100}$/.test(p.bundleId || '') && isPublicOpen_(p.bundleId)) {
+    var publicCache=CacheService.getScriptCache(),publicKey='public:'+p.bundleId+':'+control_(p.bundleId).revision;
+    var recent=publicCache.get(publicKey);
+    if(recent)return jsonResponse(JSON.parse(recent),p.callback);
     var publicBundle=readBundle_(p.bundleId);
-    return jsonResponse(publicBundle?{success:true,bundle:bundleView_(publicBundle,false)}:{success:false,message:'연수를 찾을 수 없습니다.'},p.callback);
+    var publicResult=publicBundle?{success:true,bundle:bundleView_(publicBundle,false)}:{success:false,message:'연수를 찾을 수 없습니다.'};
+    var encoded=JSON.stringify(publicResult);
+    if(publicBundle&&encoded.length<20000)publicCache.put(publicKey,encoded,5);
+    return jsonResponse(publicResult,p.callback);
   }
+  if(p.action==='getPublicBundle')return jsonResponse({success:false,message:'접수가 종료되었거나 존재하지 않는 연수입니다. 진행자에게 확인해 주세요.'},p.callback);
   // Only an unguessable, short-lived receipt capability is accepted in a URL.
   // Administrator/invitation credentials are sent in POST bodies, never query strings.
   if (p.action === 'receipt' && /^[a-f0-9]{64}$/.test(p.requestId || '')) {
@@ -42,12 +52,12 @@ function doPost(e) {
     if (cached) return jsonResponse({accepted:true});
     var result = dispatch_(p, admin);
     storeReceipt_(p.requestId, result);
-    return jsonResponse({accepted:true});
+    return jsonResponse(p.directResponse?result:{accepted:true});
   } catch (error) {
     if (p && /^[a-f0-9]{64}$/.test(p.requestId || '')) {
       storeReceipt_(p.requestId, {success:false, message:error.message || '처리 실패'});
     }
-    return jsonResponse({accepted:false});
+    return jsonResponse(p&&p.directResponse?{success:false,message:error.message||'처리 실패'}:{accepted:false});
   } finally { if (locked) lock.releaseLock(); }
 }
 
@@ -105,7 +115,7 @@ function dispatch_(p, admin) {
   }
   if (p.action === 'login') {
     if (!admin) throw new Error('관리자 키가 올바르지 않습니다.');
-    return {success:true, apiVersion:API_VERSION, bundles:listBundleSummaries_()};
+    return {success:true, apiVersion:API_VERSION, bundles:listBundleSummaries_(),overview:adminOverview_(),settings:getAppSettings_()};
   }
   if (p.action === 'listBundles') {
     if (!admin) throw new Error('관리자 전용 요청입니다.');
@@ -135,7 +145,8 @@ function dispatch_(p, admin) {
   if (p.action === 'initBundle') {
     if (!admin) throw new Error('관리자 전용 요청입니다.');
     checkRevision_(bundle, p.expectedRevision);
-    var clean = validateBundle_(p.bundle, bundle);
+    var candidate=p.metadataOnly&&bundle?Object.assign({},p.bundle,{attendees:bundle.attendees}):p.bundle;
+    var clean = validateBundle_(candidate, bundle);
     // Roster/metadata writes never overwrite existing attendance or signatures.
     if (bundle) {
       clean.createdAt = bundle.createdAt;
@@ -145,6 +156,11 @@ function dispatch_(p, admin) {
         return a;
       });
     } else clean.createdAt = new Date().toISOString();
+    if(p.metadataOnly&&bundle){
+      var registry=getRegistry_(SpreadsheetApp.getActiveSpreadsheet()),row=findRegistryRow_(registry,id);
+      upsertRegistry_(registry,row,clean,registry.getRange(row,11).getValue());bump_(id);
+      return {success:true,bundle:bundleView_(clean,true)};
+    }
     saveBundle_(clean); bump_(id);
     return {success:true,bundle:bundleView_(readBundle_(id),true)};
   }
@@ -312,7 +328,7 @@ function storeReceipt_(id, result) {
   var cache=CacheService.getScriptCache(), chunks=Math.ceil(body.length/18000), entries={};
   for(var i=0;i<chunks;i++) entries['r:'+id+':'+i]=JSON.stringify({part:body.slice(i*18000,(i+1)*18000)});
   cache.putAll(entries,90);
-  cache.put('r:'+id+':meta',JSON.stringify({ready:true,parts:chunks}),90);
+  cache.put('r:'+id+':meta',JSON.stringify({ready:true,parts:chunks,firstPart:body.slice(0,18000)}),90);
 }
 function jsonResponse(obj, callback) {
   var valid=/^gas_cb_[a-f0-9]{32}$/.test(callback || '');

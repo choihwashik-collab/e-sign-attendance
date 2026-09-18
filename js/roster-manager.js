@@ -3,16 +3,18 @@ const RosterManager = {
   rosters:[],draft:null,target:'template',dirty:false,
   people(rows) { return rows.map(p=>({department:String(p.department||''),name:String(p.name||''),position:String(p.position||'')})); },
   reset() {
-    this.rosters=[];this.draft=null;this.dirty=false;App.rosterDirty=false;
+    this.rosters=[];this.draft=null;this.dirty=false;this.loadedAt=0;App.rosterDirty=false;
     document.getElementById('modal-roster-manager')?.classList.add('hidden');
     document.getElementById('roster-editor-body')?.replaceChildren();
   },
   markDirty(){this.dirty=true;App.rosterDirty=true;},
   confirmDiscard(){return !this.dirty || confirm('저장하지 않은 명단 변경을 버릴까요?');},
-  async refresh() {
+  async refresh(force=false) {
     App.requireAdmin();
+    if(!force&&Date.now()-(this.loadedAt||0)<30000){this.renderRosterSelect();return;}
     this.rosters=App.localMode?JSON.parse(localStorage.getItem('eSign_basicRosters')||'[]'):await GasSync.listRosters();
     if(!Array.isArray(this.rosters))throw new Error('기본명단을 불러오지 못했습니다.');
+    this.loadedAt=Date.now();
     this.renderRosterSelect();
   },
   renderRosterSelect(selectedId='') {
@@ -123,7 +125,7 @@ const RosterManager = {
     const saved=this.rosters.find(r=>r.id===this.draft.id);if(!saved)throw new Error('저장된 기본명단을 선택하세요.');
     if(App.localMode)localStorage.setItem('eSign_basicRosters',JSON.stringify(this.rosters.filter(r=>r.id!==saved.id)));
     else await GasSync.deleteRoster(saved);
-    this.dirty=false;await this.open();
+    this.dirty=false;this.loadedAt=0;await this.open();
   },
   close() {if(App.busy&&this.dirty)return;if(!this.confirmDiscard())return;this.dirty=false;App.rosterDirty=false;document.getElementById('modal-roster-manager').classList.add('hidden');},
   init() {
@@ -131,7 +133,7 @@ const RosterManager = {
     on('btn-basic-rosters',()=>this.open());
     on('btn-basic-rosters-home',()=>this.open());
     on('btn-edit-bundle-roster',()=>this.open('bundle'));
-    on('btn-roster-refresh',async()=>{if(this.confirmDiscard()){this.dirty=false;await this.refresh();}});
+    on('btn-roster-refresh',async()=>{if(this.confirmDiscard()){this.dirty=false;await this.refresh(true);}});
     on('btn-roster-open',()=>this.loadSelected());
     on('btn-roster-new',()=>{if(!this.confirmDiscard())return;this.draft={id:'roster_'+GasSync.randomHex(16),name:'기본명단'+(this.rosters.length+1),attendees:[]};this.dirty=false;this.render();});
     on('btn-roster-from-bundle',()=>{

@@ -26,13 +26,13 @@ const GasSync = {
   async testConnection(url = this.getScriptUrl()) {
     if (!this.isValidUrl(url)) return {success:false,message:'연동 주소가 없습니다.'};
     const result = await this._jsonpRequest(url,{action:'ping'});
-    const success = result?.success && result.apiVersion === 13;
+    const success = result?.success && [13,14].includes(result.apiVersion);
     return {success:!!success,message:success?'서버 연결 확인':'서버 업데이트 또는 연결 확인이 필요합니다.'};
   },
   async login(key) {
     if (typeof key !== 'string' || key.length < 32) throw new Error('스크립트 속성의 관리자 키(32자 이상)를 입력하세요.');
     const result = await this._post({action:'login'},key);
-    if (result.apiVersion !== 13) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
+    if (![13,14].includes(result.apiVersion)) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
     this.adminKey = key;
     this.participant = null;
     return result;
@@ -42,13 +42,23 @@ const GasSync = {
   async fetchAdminOverview() { return (await this._post({action:'adminOverview'})).bundles; },
   async fetchAppSettings() { return (await this._post({action:'getAppSettings'})).settings; },
   async saveAppSettings(settings) { return (await this._post({action:'saveAppSettings',settings})).settings; },
-  async fetchPublicBundles() { const r=await this._jsonpRequest(this.getScriptUrl(),{action:'listPublicBundles'});if(!r?.success)throw new Error('공개 연수 목록을 불러오지 못했습니다.');return r.bundles; },
+  async publicRead(params) {
+    // Read-only requests can be retried safely; never retry a write automatically.
+    for(let attempt=0;attempt<2;attempt++){
+      const r=await this._jsonpRequest(this.getScriptUrl(),params,20000);
+      if(r) {if(!r.success)throw new Error(r.message||'연수를 조회하지 못했습니다.');return r;}
+    }
+    throw new Error('서버 응답을 받지 못했습니다. Wi-Fi 또는 모바일 데이터 연결을 확인한 뒤 다시 시도해 주세요.');
+  },
+  async fetchPublicBundles() { return (await this.publicRead({action:'listPublicBundles'})).bundles; },
   async fetchBundle(bundleId) {
-    if(!this.adminKey&&!this.participant){const r=await this._jsonpRequest(this.getScriptUrl(),{action:'getPublicBundle',bundleId});if(!r?.success)throw new Error(r?.message||'연수를 불러오지 못했습니다.');return r.bundle;}
+    if(!this.adminKey&&!this.participant)return (await this.publicRead({action:'getPublicBundle',bundleId})).bundle;
     return (await this._post({action:'getBundle',bundleId})).bundle;
   },
-  async syncBundle(bundle) {
-    return this._post({action:'initBundle',bundle,expectedRevision:bundle.revision});
+  async syncBundle(bundle,metadataOnly=false) {
+    // Existing attendance is authoritative on the server. Do not re-upload PNGs on edits.
+    const wire=Number.isInteger(bundle.revision)?{...bundle,attendees:bundle.attendees.map(a=>({...a,signatureData:null,isSigned:false}))}:bundle;
+    return this._post({action:'initBundle',bundle:wire,metadataOnly,expectedRevision:bundle.revision});
   },
   async submitAttendee(bundle, attendee) {
     return this._post({action:'submitAttendee',bundleId:bundle.id,attendee,expectedRevision:bundle.revision});
@@ -71,15 +81,26 @@ const GasSync = {
     const url = this.getScriptUrl();
     if (!this.isValidUrl(url)) throw new Error('서버 주소를 먼저 설정하세요.');
     const requestId = this.randomHex();
-    const body = {...payload,requestId};
+    const body = {...payload,requestId,directResponse:true};
     if (loginKey || this.adminKey) body.adminKey=loginKey || this.adminKey;
     else if (this.participant?.bundleId === payload.bundleId) body.token=this.participant.token;
     else if(payload.action!=='submitSignature'&&payload.action!=='submitReason') throw new Error('진행자 로그인 또는 유효한 초대 링크가 필요합니다.');
     const controller = new AbortController();
     const timer = setTimeout(()=>controller.abort(),45000);
     try {
-      await fetch(url,{method:'POST',mode:'no-cors',credentials:'omit',referrerPolicy:'no-referrer',
-        headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body),signal:controller.signal});
+      let direct;
+      try {
+        const response=await fetch(url,{method:'POST',mode:'cors',credentials:'omit',referrerPolicy:'no-referrer',
+          headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body),signal:controller.signal});
+        if(response.ok&&typeof response.json==='function')direct=await response.json();
+      } catch(error) {
+        // The POST may already have succeeded. Check the SAME receipt; do not resend it.
+        if(controller.signal.aborted)throw new Error('서버 응답 시간이 초과되었습니다. 저장 여부를 새로고침으로 확인한 후 재시도하세요.');
+      }
+      if(typeof direct?.success==='boolean') {
+        if(!direct.success)throw new Error(direct.message||'서버 처리 실패');
+        return direct;
+      }
       const deadline=Date.now()+45000;
       let receipt;
       while (Date.now()<deadline) {
@@ -88,8 +109,8 @@ const GasSync = {
         await new Promise(r=>setTimeout(r,1000));
       }
       if (!receipt?.ready || !Number.isInteger(receipt.parts) || receipt.parts<1 || receipt.parts>223) throw new Error('저장 결과를 확인하지 못했습니다. 최신 자료를 불러와 확인한 후 재시도하세요.');
-      const parts=[];
-      for(let i=0;i<receipt.parts;i+=4) {
+      const parts=typeof receipt.firstPart==='string'?[receipt.firstPart]:[];
+      for(let i=parts.length;i<receipt.parts;i+=4) {
         const batch=await Promise.all(Array.from({length:Math.min(4,receipt.parts-i)},(_,j)=>
           this._jsonpRequest(url,{action:'receipt',requestId,part:i+j})));
         if(batch.some(p=>typeof p?.part!=='string')) throw new Error('응답이 만료되었습니다. 최신 자료를 다시 불러오세요.');
@@ -100,7 +121,7 @@ const GasSync = {
       return result;
     } finally { clearTimeout(timer); }
   },
-  _jsonpRequest(baseUrl, params, timeoutMs = 7000) {
+  _jsonpRequest(baseUrl, params, timeoutMs = 20000) {
     if (!this.isValidUrl(baseUrl)) return Promise.reject(new Error('허용되지 않은 서버 주소입니다.'));
     return new Promise(resolve=>{
       const callbackName='gas_cb_'+this.randomHex(16),script=document.createElement('script');

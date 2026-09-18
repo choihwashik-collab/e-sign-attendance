@@ -51,6 +51,10 @@ const App = {
     document.body.classList.toggle('app-busy',active);
     document.body.setAttribute?.('aria-busy',String(active));
     const indicator=document.getElementById('busy-indicator');if(indicator)indicator.hidden=!active;
+    if(active){
+      this.busyInputs=[...document.querySelectorAll('input:not(:disabled),select:not(:disabled),textarea:not(:disabled)')];
+      this.busyInputs.forEach(el=>{el.disabled=true;});
+    }else{(this.busyInputs||[]).forEach(el=>{el.disabled=false;});this.busyInputs=[];}
   },
   bindFileUpload({inputId,triggerId,dropZoneId,onFile}) {
     const input=document.getElementById(inputId),trigger=triggerId?document.getElementById(triggerId):null,drop=dropZoneId?document.getElementById(dropZoneId):null;
@@ -86,7 +90,9 @@ const App = {
     const login=await GasSync.login(key);
     const bundles=Array.isArray(login.bundles)?login.bundles:await GasSync.fetchBundles();
     this.localMode=false;AppState.isAdminAuthenticated=true;AppState.bundles=bundles;AppState.currentBundle=null;
-    [AppState.adminOverview,AppState.appSettings]=await Promise.all([GasSync.fetchAdminOverview(),GasSync.fetchAppSettings()]);
+    if(login.overview&&login.settings){AppState.adminOverview=login.overview;AppState.appSettings=login.settings;}
+    else [AppState.adminOverview,AppState.appSettings]=await Promise.all([GasSync.fetchAdminOverview(),GasSync.fetchAppSettings()]);
+    this.hubRefreshedAt=Date.now();
     document.getElementById('input-admin-pw').value='';
     document.getElementById('modal-admin-password').classList.add('hidden');
     history.replaceState(null,'',location.pathname);
@@ -107,6 +113,7 @@ const App = {
     this.message('단일 기기 모드: 서명은 이 브라우저에만 저장됩니다. 브라우저 자료 삭제 전 JSON 백업을 받으세요.');
   },
   logout() {
+    this.hubRefreshedAt=0;this.bundleReadAt={};
     GasSync.logout();clearInterval(this.syncInterval);this.share=null;this.localMode=false;this.settingsDirty=false;
     AppState.isAdminAuthenticated=false;AppState.bundles=[];AppState.currentBundle=null;AppState.selectedAttendeeForSign=null;AppState.adminOverview=[];
     AppState.signaturePad?.clear();
@@ -119,12 +126,14 @@ const App = {
     const next=AppState.bundles.filter(b=>b.id!==bundle.id).concat(bundle);
     if(this.localMode)localStorage.setItem('eSign_bundles',JSON.stringify(next)); // Fail before showing success.
     AppState.bundles=next;
+    this.bundleReadAt=this.bundleReadAt||{};this.bundleReadAt[bundle.id]=Date.now();
+    this.hubRefreshedAt=0;
     if(AppState.currentBundle?.id===bundle.id)AppState.currentBundle=bundle;
   },
   async selectBundle(id,refresh=true) {
     if(this.settingsDirty && !confirm('저장하지 않은 설정을 버리고 이동할까요?'))return;
     let b=AppState.bundles.find(b=>b.id===id);
-    if(!this.localMode && refresh)b=await GasSync.fetchBundle(id);
+    if(!this.localMode && refresh&&(!b||b.summary||Date.now()-(this.bundleReadAt?.[id]||0)>10000))b=await GasSync.fetchBundle(id);
     if(!b)throw new Error('연수를 찾을 수 없습니다.');
     this.acceptBundle(b);AppState.currentBundle=b;AppState.selectedDepartment='ALL';AppState.searchQuery='';
     this.settingsDirty=false;
@@ -136,16 +145,19 @@ const App = {
     clearInterval(this.syncInterval);
     if(this.localMode)return;
     this.syncInterval=setInterval(()=>{
-      if(!document.hidden&&!this.busy&&!this.settingsDirty&&!this.rosterDirty&&!AppState.selectedAttendeeForSign&&AppState.currentBundle)
-        this.perform(()=>this.syncFromGoogleSheet(false));
+      if(!document.hidden&&!this.busy&&!this.settingsDirty&&!this.rosterDirty&&!AppState.selectedAttendeeForSign&&AppState.currentBundle&&!this.backgroundSync)
+        this.syncFromGoogleSheet(false,true).catch(()=>{});
     },30000);
   },
-  async syncFromGoogleSheet(showToast=true) {
+  async syncFromGoogleSheet(showToast=true,background=false) {
     if(this.localMode||!AppState.currentBundle)return;
     if(this.settingsDirty)throw new Error('입력 중인 설정을 먼저 저장해 주세요.');
     if(AppState.selectedAttendeeForSign)throw new Error('서명 입력을 완료하거나 취소해 주세요.');
-    const id=AppState.currentBundle.id,b=await GasSync.fetchBundle(id);
+    const id=AppState.currentBundle.id,revision=AppState.currentBundle.revision;
+    if(background)this.backgroundSync=true;
+    let b;try{b=await GasSync.fetchBundle(id);}finally{if(background)this.backgroundSync=false;}
     if(AppState.currentBundle?.id!==id)return;
+    if(background&&(this.busy||this.settingsDirty||this.rosterDirty||AppState.selectedAttendeeForSign||AppState.currentBundle.revision!==revision))return;
     this.acceptBundle(b);this.updateHeaderInfo();this.renderParticipantView();this.renderAdminOverview();this.renderBundleSessionsInSettings();
     if(showToast)this.message('최신 명단과 서명을 불러왔습니다.');
   },
@@ -157,7 +169,7 @@ const App = {
     change(draft);
     if(!draft.sessions.length)throw new Error('최소 1개의 연수가 필요합니다.');
     if(draft.attendees.length>200)throw new Error('묶음당 최대 200명입니다.');
-    const saved=this.localMode?draft:(await GasSync.syncBundle(draft)).bundle;
+    const saved=this.localMode?draft:(await GasSync.syncBundle(draft,savingSettings)).bundle;
     this.acceptBundle(saved);this.settingsDirty=false;
     this.renderParticipantView();this.renderAdminOverview();this.renderBundleSessionsInSettings();
     this.message(this.localMode?'이 브라우저에 저장했습니다.':'서버 저장을 확인했습니다.');
@@ -221,9 +233,10 @@ const App = {
   },
   async refreshAdminHub() {
     if(!AppState.isAdminAuthenticated)return;
+    if(!this.localMode&&Date.now()-(this.hubRefreshedAt||0)<15000){this.renderAdminHub();return;}
     if(this.localMode){AppState.adminOverview=this.localAdminOverview();}
     else [AppState.adminOverview,AppState.appSettings]=await Promise.all([GasSync.fetchAdminOverview(),GasSync.fetchAppSettings()]);
-    this.renderAdminHub();
+    this.hubRefreshedAt=Date.now();this.renderAdminHub();
   },
   switchAdminPage(page,refreshRoster=true) {
     AppState.adminPage=page==='setup'?'setup':'overview';

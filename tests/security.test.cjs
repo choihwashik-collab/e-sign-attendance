@@ -76,7 +76,7 @@ test('anonymous legacy read and write routes fail closed',()=>{
   assert.equal(s.ss.getSheets().length,1);
 });
 test('administrator key must be configured, strong and match',()=>{
-  const s=server(),login=s.request({action:'login',adminKey:KEY});assert.equal(login.success,true);assert.equal(login.apiVersion,13);assert.ok(Array.isArray(login.bundles));
+  const s=server(),login=s.request({action:'login',adminKey:KEY});assert.equal(login.success,true);assert.equal(login.apiVersion,14);assert.ok(Array.isArray(login.bundles));
   assert.equal(s.request({action:'login',adminKey:'2026'}).success,false);
   s.props.set('ADMIN_KEY','short');
   assert.equal(s.request({action:'login',adminKey:'short'}).success,false);
@@ -221,13 +221,38 @@ test('public server default is fixed; arbitrary/shared query URLs rejected',asyn
 test('transport reads server acknowledgement, not opaque success; key never enters query',async()=>{
   const c=client();c.gas.setScriptUrl('https://script.google.com/macros/s/test/exec');c.gas.adminKey=KEY;
   let sent;
-  c.context.fetch=async(url,p)=>{sent=JSON.parse(p.body);assert.equal(p.mode,'no-cors');return {type:'opaque'};};
+  c.context.fetch=async(url,p)=>{sent=JSON.parse(p.body);assert.equal(p.mode,'cors');return {type:'opaque'};};
   c.gas._jsonpRequest=async(url,params)=>{
     assert.equal(params.adminKey,undefined);assert.equal(params.token,undefined);
     return params.part===undefined?{ready:true,parts:1}:{part:JSON.stringify({success:false,message:'server rejected'})};
   };
   await assert.rejects(()=>c.gas._post({action:'login'}),/server rejected/);
   assert.equal(sent.adminKey,KEY);
+});
+test('direct response completes a write in one request; CORS failure checks receipt without re-posting',async()=>{
+  const c=client();c.gas.setScriptUrl('https://script.google.com/macros/s/test/exec');c.gas.adminKey=KEY;
+  let posts=0,receipts=0;
+  c.context.fetch=async()=>{posts++;return {ok:true,json:async()=>({success:true,signedAt:'saved'})};};
+  c.gas._jsonpRequest=async()=>{receipts++;return {ready:true,parts:1,firstPart:JSON.stringify({success:true,signedAt:'fallback'})};};
+  assert.equal((await c.gas._post({action:'submitSignature'})).signedAt,'saved');assert.equal(posts,1);assert.equal(receipts,0);
+  c.context.fetch=async()=>{posts++;throw Error('CORS');};
+  assert.equal((await c.gas._post({action:'submitSignature'})).signedAt,'fallback');assert.equal(posts,2);assert.equal(receipts,1);
+});
+test('public lookup tolerates a slow first attempt and preserves explicit closed errors',async()=>{
+  const c=client();let calls=0;
+  c.gas._jsonpRequest=async(u,p,timeout)=>{assert.equal(timeout,20000);return ++calls===1?null:{success:true,bundle:{id:'ok'}};};
+  assert.equal((await c.gas.fetchBundle('ok')).id,'ok');assert.equal(calls,2);
+  c.gas._jsonpRequest=async()=>({success:false,message:'접수 종료'});
+  await assert.rejects(()=>c.gas.fetchBundle('ok'),/접수 종료/);
+});
+test('metadata-only saves preserve identities and signatures while updating session settings',()=>{
+  const s=prepare();s.request({action:'submitSignature',bundleId:'bundle_test',token:s.token,attendeeId:'att_1',signatureData:PNG});
+  const b=s.request({action:'getBundle',bundleId:'bundle_test',adminKey:KEY}).bundle;
+  b.sessions[0].title='수정 제목';b.attendees=[];
+  const saved=s.request({action:'initBundle',bundle:b,metadataOnly:true,expectedRevision:b.revision,adminKey:KEY});
+  assert.equal(saved.success,true);assert.equal(saved.bundle.attendees[0].signatureData,PNG);
+  const actual=s.request({action:'getBundle',bundleId:'bundle_test',adminKey:KEY}).bundle;
+  assert.equal(actual.sessions[0].title,'수정 제목');assert.equal(actual.attendees[0].signatureData,PNG);
 });
 test('no automatic remote writes at startup, and local data stays untouched',async()=>{
   const c=client();c.storage.set('eSign_bundles','[{"id":"old"}]');
