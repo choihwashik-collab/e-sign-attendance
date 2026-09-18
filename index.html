@@ -7,7 +7,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <title>연수 참석자 전자 서명 시스템</title>
     
-    <link rel="stylesheet" href="css/tailwind.css?v=13">
+    <link rel="stylesheet" href="css/tailwind.css?v=15">
     
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     
@@ -17,7 +17,7 @@
     <script src="https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js" integrity="sha384-qovJwSBbRDPP5cEjCp8S0UP66wrvnjaa60XMOGzTNanrThcrGfXfnZkvgY8N1KT3" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js" integrity="sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz" crossorigin="anonymous"></script>
     
-    <link rel="stylesheet" href="css/style.css?v=13">
+    <link rel="stylesheet" href="css/style.css?v=15">
 </head>
 <body class="min-h-screen bg-slate-50 flex flex-col text-gray-800 font-sans">
     <div id="busy-indicator" hidden role="status" aria-live="polite"><span class="busy-spinner"></span><span>처리 중입니다. 한 번만 누르고 잠시 기다려 주세요.</span></div>
@@ -175,15 +175,75 @@
 
         <!-- VIEW 2: Admin Dashboard -->
         <section id="view-admin" class="hidden">
-            <div class="bg-white rounded-2xl shadow-lg overflow-hidden">
+            <div class="mb-6">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-900">전체 관리자</h1>
+                        <p class="text-sm text-gray-500 mt-1">개설된 모든 연수, 기본명단, 서명부 기본값과 서명 현황을 한곳에서 관리합니다.</p>
+                    </div>
+                    <div class="inline-flex rounded-xl border border-gray-200 bg-white p-1 shadow-sm">
+                        <button class="admin-main-tab-btn rounded-lg px-4 py-2 text-sm font-bold bg-brand-600 text-white" data-admin-page="overview">개설 연수 관리</button>
+                        <button class="admin-main-tab-btn rounded-lg px-4 py-2 text-sm font-bold text-gray-600" data-admin-page="setup">연수 세팅·모니터링</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="admin-page-overview" class="admin-main-page space-y-6">
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div class="admin-summary-card"><span>연수 그룹</span><strong id="admin-all-bundle-count">0</strong></div>
+                    <div class="admin-summary-card"><span>개별 연수</span><strong id="admin-all-session-count">0</strong></div>
+                    <div class="admin-summary-card"><span>전체 대상자</span><strong id="admin-all-attendee-count">0</strong></div>
+                    <div class="admin-summary-card admin-summary-success"><span>서명 완료</span><strong id="admin-all-signed-count">0</strong></div>
+                </div>
+                <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                    <div class="p-5 border-b flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div><h2 class="text-xl font-bold">개설 연수 목록</h2><p class="text-sm text-gray-500 mt-1">연수명을 누르면 해당 연수의 설정을 바로 수정할 수 있습니다.</p></div>
+                        <button id="btn-create-bundle-admin" class="px-4 py-2 rounded-xl bg-brand-600 text-white font-bold">새 연수 그룹 만들기</button>
+                    </div>
+                    <div id="admin-overview-bundle-list" class="divide-y divide-gray-200"></div>
+                </div>
+            </div>
+
+            <div id="admin-page-setup" class="admin-main-page hidden space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-white border border-brand-200 rounded-2xl p-6 shadow-sm">
+                        <h2 class="text-xl font-bold">기본 연수명단 설정</h2>
+                        <p class="text-sm text-gray-600 mt-2">‘기본명단1’, ‘기본명단2’처럼 반복 사용하는 명단을 저장하고 Excel로 불러오거나 직접 수정합니다.</p>
+                        <div class="flex flex-wrap gap-2 mt-5">
+                            <button id="btn-basic-rosters" class="px-5 py-2.5 bg-brand-600 text-white rounded-xl">기본명단 열기·수정</button>
+                            <a href="outputs/basic-roster-template.xlsx" download class="px-5 py-2.5 border border-green-600 text-green-700 rounded-xl">Excel 기본 양식 다운로드</a>
+                        </div>
+                    </div>
+                    <form id="form-default-sheet-settings" class="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm space-y-4">
+                        <div><h2 class="text-xl font-bold">기본 서명부 세팅</h2><p class="text-sm text-gray-600 mt-2">새로 추가하는 연수에 자동으로 입력할 기본값입니다.</p></div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div><label for="default-session-location" class="admin-field-label">기본 장소</label><input id="default-session-location" maxlength="200" class="admin-field-input"></div>
+                            <div><label for="default-session-organizer" class="admin-field-label">기본 주관 부서/기관</label><input id="default-session-organizer" maxlength="200" class="admin-field-input"></div>
+                            <div><label for="default-verifier-dept" class="admin-field-label">확인자 소속</label><input id="default-verifier-dept" maxlength="200" class="admin-field-input"></div>
+                            <div><label for="default-verifier-name" class="admin-field-label">확인자 직급/성명</label><input id="default-verifier-name" maxlength="200" class="admin-field-input"></div>
+                        </div>
+                        <label class="flex items-center gap-2 text-sm"><input id="default-show-approval" type="checkbox"> 결재란 기본 출력</label>
+                        <div><label for="default-approval-stages" class="admin-field-label">기본 결재 단계</label><input id="default-approval-stages" maxlength="300" class="admin-field-input" placeholder="담당, 확인, 부서장"></div>
+                        <div class="text-right"><button type="submit" class="px-5 py-2.5 bg-brand-600 text-white rounded-xl font-bold">기본값 저장</button></div>
+                    </form>
+                </div>
+                <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                    <div class="p-5 border-b"><h2 class="text-xl font-bold">여러 연수 서명 완료 현황</h2><p class="text-sm text-gray-500 mt-1">한 연수 그룹의 서명은 그 그룹에 포함된 개별 연수에 공통으로 반영됩니다.</p></div>
+                    <div id="admin-session-monitor" class="divide-y divide-gray-200"></div>
+                </div>
+            </div>
+
+            <div id="admin-bundle-detail" class="hidden mt-6">
+              <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                <button id="btn-admin-detail-back" class="px-4 py-2 rounded-xl border bg-white">← 전체 연수 목록</button>
+                <div class="sm:text-right"><p class="text-xs text-gray-500">선택한 연수 그룹</p><h2 id="admin-detail-title" class="text-xl font-bold text-brand-800"></h2></div>
+              </div>
+              <div class="bg-white rounded-2xl shadow-lg overflow-hidden">
                 
                 <!-- Admin Tabs -->
                 <div class="flex overflow-x-auto border-b border-gray-200 bg-gray-50 hide-scrollbar">
                     <button class="admin-tab-btn flex-1 py-4 px-6 text-sm font-medium whitespace-nowrap text-brand-600 border-b-2 border-brand-600 bg-white" data-admin-tab="live">
                         📊 실시간 현황
-                    </button>
-                    <button class="admin-tab-btn flex-1 py-4 px-6 text-sm font-medium whitespace-nowrap text-gray-500 hover:text-gray-700 border-b-2 border-transparent hover:bg-gray-100" data-admin-tab="roster">
-                        📋 사전 명단 등록
                     </button>
                     <button class="admin-tab-btn flex-1 py-4 px-6 text-sm font-medium whitespace-nowrap text-gray-500 hover:text-gray-700 border-b-2 border-transparent hover:bg-gray-100" data-admin-tab="document">
                         📄 서명부 (인쇄/PDF)
@@ -199,7 +259,7 @@
                 <div class="p-4 sm:p-6 lg:p-8 min-h-[500px]">
                     
                     <!-- Tab 1: Live Overview -->
-                    <div id="tab-pane-live" class="space-y-6">
+                    <div id="tab-pane-live" class="tab-pane space-y-6">
                         
                         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                             <div class="bg-gray-50 rounded-xl p-4 border border-gray-100">
@@ -254,76 +314,8 @@
                         </div>
                     </div>
 
-                    <!-- Tab 2: Roster Upload -->
-                    <div id="tab-pane-roster" class="hidden space-y-6">
-                        <div class="bg-white border border-brand-200 rounded-xl p-5 shadow-sm">
-                            <h3 class="font-bold text-gray-900 mb-2">기본명단과 이번 연수 명단</h3>
-                            <p class="text-sm text-gray-600 mb-4">기본명단을 저장·수정하거나 Excel에서 가져온 뒤, 현재 연수에 추가 또는 전체 교체할 수 있습니다.</p>
-                            <div class="flex flex-wrap gap-2">
-                                <button id="btn-basic-rosters" class="px-4 py-2 bg-brand-600 text-white rounded-xl">기본명단 설정</button>
-                                <button id="btn-edit-bundle-roster" class="px-4 py-2 border border-gray-300 rounded-xl">이번 연수 명단 직접 수정</button>
-                                <a href="outputs/basic-roster-template.xlsx" download class="px-4 py-2 border border-green-600 text-green-700 rounded-xl">기본 양식 다운로드</a>
-                            </div>
-                        </div>
-                        <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r-xl">
-                            <div class="flex">
-                                <div class="flex-shrink-0">
-                                    <i class="fas fa-info-circle text-yellow-400"></i>
-                                </div>
-                                <div class="ml-3">
-                                    <h3 class="text-sm font-medium text-yellow-800">명단 등록 안내</h3>
-                                    <div class="mt-2 text-sm text-yellow-700">
-                                        <p>공문(PDF) 또는 엑셀 파일을 업로드하거나 명단을 직접 붙여넣어 등록할 수 있습니다.</p>
-                                        <p class="mt-1">인식 가능한 형식: "소속 직급 성명" (예: 서울초등학교 교사 홍길동)</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            
-                            <!-- File Upload -->
-                            <div class="space-y-3">
-                                <h4 class="font-bold text-gray-800">파일 업로드 (PDF, 엑셀)</h4>
-                                <div id="roster-drop-zone" role="button" tabindex="0" aria-label="명단 파일 선택 또는 드래그 업로드" class="border-2 border-dashed border-brand-300 rounded-xl p-8 text-center bg-brand-50 hover:bg-brand-100 transition-colors cursor-pointer flex flex-col items-center justify-center min-h-[200px]">
-                                    <i class="fas fa-file-upload text-4xl text-brand-500 mb-3"></i>
-                                    <p class="text-brand-800 font-medium mb-1">클릭하거나 파일을 여기로 드래그하세요</p>
-                                    <p class="text-brand-600 text-xs">.pdf, .xlsx, .xls, .csv, .txt 지원</p>
-                                </div>
-                                <input id="roster-file-input" type="file" accept=".pdf,.xlsx,.xls,.csv,.txt" class="hidden">
-                            </div>
-
-                            <!-- Text Paste -->
-                            <div class="space-y-3">
-                                <h4 class="font-bold text-gray-800">텍스트 직접 입력</h4>
-                                <div class="flex flex-col h-full min-h-[200px]">
-                                    <textarea id="textarea-roster-paste" class="w-full flex-grow border border-gray-300 rounded-xl p-3 text-sm focus:ring-2 focus:ring-brand-500 outline-none resize-none" placeholder="여기에 명단 텍스트를 붙여넣기 하세요...&#10;예시:&#10;서울초 교사 김철수&#10;부산중 교감 이영희"></textarea>
-                                    <button id="btn-parse-text-roster" class="mt-3 w-full bg-gray-800 hover:bg-gray-900 text-white font-medium py-2 px-4 rounded-xl transition-colors">
-                                        텍스트 분석하여 등록
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="pt-4 border-t border-gray-200">
-                            <h4 class="font-bold text-gray-800 mb-3">명단 추가 방식 설정</h4>
-                            <div class="flex space-x-6">
-                                <label class="flex items-center space-x-2 cursor-pointer">
-                                    <input id="radio-roster-append" type="radio" name="roster-mode" value="append" checked class="text-brand-600 focus:ring-brand-500 w-4 h-4">
-                                    <span class="text-sm">기존 명단에 추가 (권장)</span>
-                                </label>
-                                <label class="flex items-center space-x-2 cursor-pointer">
-                                    <input id="radio-roster-replace" type="radio" name="roster-mode" value="replace" class="text-red-600 focus:ring-red-500 w-4 h-4">
-                                    <span class="text-sm text-red-600">기존 명단 삭제 후 새로 등록</span>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div id="file-upload-status" class="mt-4"></div>
-                    </div>
-
                     <!-- Tab 3: Document/PDF -->
-                    <div id="tab-pane-document" class="hidden space-y-6">
+                    <div id="tab-pane-document" class="tab-pane hidden space-y-6">
                         
                         <div class="flex flex-col sm:flex-row gap-3 bg-gray-50 p-4 rounded-xl border border-gray-200">
                             <button id="btn-print-doc" class="flex-1 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 py-2 px-4 rounded-xl font-medium shadow-sm transition-colors flex items-center justify-center">
@@ -337,8 +329,9 @@
                             </button>
                         </div>
 
-                        <div class="bg-gray-100 p-4 rounded-xl overflow-x-auto border border-gray-300 min-h-[600px] flex justify-center">
-                            <div id="pdf-preview-area" class="bg-white shadow-xl max-w-[800px] w-full p-8 md:p-12 origin-top">
+                        <p class="text-sm text-gray-600">연수별로 제목과 설정이 다른 서명부가 생성됩니다. 한 페이지는 25행씩 2열(최대 50명)이며 100명은 2페이지로 출력됩니다.</p>
+                        <div class="pdf-paper-shell bg-gray-100 p-4 rounded-xl overflow-x-auto border border-gray-300 min-h-[600px]">
+                            <div id="pdf-preview-area">
                                 <!-- Print layout rendered by JS -->
                             </div>
                         </div>
@@ -346,7 +339,7 @@
                     </div>
 
                     <!-- Tab 4: QR Code -->
-                    <div id="tab-pane-qr" class="hidden space-y-6 flex flex-col items-center justify-center py-8">
+                    <div id="tab-pane-qr" class="tab-pane hidden space-y-6 flex flex-col items-center justify-center py-8">
                         
                         <div class="text-center mb-6">
                             <h3 class="text-2xl font-bold text-gray-900 mb-2">참석자 서명용 QR 코드</h3>
@@ -369,23 +362,21 @@
                     </div>
 
                     <!-- Tab 5: Settings -->
-                    <div id="tab-pane-settings" class="hidden space-y-8">
+                    <div id="tab-pane-settings" class="tab-pane hidden space-y-8">
                         
                         <!-- 연수 기본정보 설정 -->
                         <form id="form-session-info" class="space-y-6">
                             <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-                                <h3 class="text-lg font-bold text-gray-900 mb-4 pb-2 border-b">📝 연수 기본 정보</h3>
+                                <h3 class="text-lg font-bold text-gray-900 mb-4 pb-2 border-b">📝 연수 그룹 및 개별 연수 설정</h3>
                                 
                                 <div class="space-y-4">
                                     <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-1">현재 연수 묶음</label>
-                                        <div class="text-lg font-bold text-brand-700 bg-brand-50 px-4 py-2 rounded-lg inline-block session-bundle-name-display">
-                                            <!-- JS will inject bundle name here -->
-                                        </div>
+                                        <label for="input-bundle-name-settings" class="block text-sm font-medium text-gray-700 mb-1">연수 그룹 이름</label>
+                                        <input id="input-bundle-name-settings" maxlength="200" class="w-full border border-gray-300 rounded-xl px-4 py-2 font-bold text-brand-700" placeholder="예: 9월 교직원 연수">
                                     </div>
 
                                     <div>
-                                        <label class="block text-sm font-medium text-gray-700 mb-1">포함된 연수 목록</label>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">그룹에 포함된 연수 - 연수명을 눌러 각각 수정하세요</label>
                                         <div class="border border-gray-200 rounded-xl overflow-hidden">
                                             <ul id="settings-session-list" class="divide-y divide-gray-200 bg-gray-50">
                                                 <!-- JS renders sessions here with delete buttons -->
@@ -399,14 +390,22 @@
                                             </div>
                                         </div>
                                     </div>
+
+                                    <div class="bg-brand-50 border border-brand-200 rounded-xl p-4">
+                                        <h4 class="font-bold text-brand-900 mb-3">선택한 연수 설정</h4>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div><label for="input-session-title-settings" class="block text-sm font-medium mb-1">연수명</label><input id="input-session-title-settings" maxlength="200" class="w-full border rounded-xl px-4 py-2"></div>
+                                            <div><label for="input-session-date-settings" class="block text-sm font-medium mb-1">연수 일자</label><input id="input-session-date-settings" type="date" class="w-full border rounded-xl px-4 py-2"></div>
+                                        </div>
+                                    </div>
                                     
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div>
-                                            <label class="block text-sm font-medium text-gray-700 mb-1">연수 장소</label>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">선택한 연수 장소</label>
                                             <input id="input-session-location" type="text" class="w-full border border-gray-300 rounded-xl px-4 py-2 focus:ring-2 focus:ring-brand-500 outline-none">
                                         </div>
                                         <div>
-                                            <label class="block text-sm font-medium text-gray-700 mb-1">주관 부서/기관</label>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">선택한 연수 주관 부서/기관</label>
                                             <input id="input-session-organizer" type="text" class="w-full border border-gray-300 rounded-xl px-4 py-2 focus:ring-2 focus:ring-brand-500 outline-none">
                                         </div>
                                     </div>
@@ -432,12 +431,40 @@
                                     
                                     <div class="pt-4 text-right">
                                         <button type="submit" class="bg-brand-600 hover:bg-brand-700 text-white font-medium py-2 px-6 rounded-xl shadow-sm transition-colors">
-                                            설정 저장
+                                            그룹 및 선택 연수 저장
                                         </button>
                                     </div>
                                 </div>
                             </div>
                         </form>
+
+                        <div class="bg-white p-6 rounded-xl border border-gray-200 shadow-sm space-y-5">
+                            <div><h3 class="text-lg font-bold text-gray-900">👥 현재 연수 그룹 참석자 명단</h3><p class="text-sm text-gray-600 mt-1">기본명단을 불러온 뒤 현재 그룹에 맞게 사람을 추가하거나 삭제할 수 있습니다.</p></div>
+                            <div class="flex flex-col sm:flex-row gap-2">
+                                <select id="settings-basic-roster-select" class="flex-grow border rounded-xl px-3 py-2" aria-label="적용할 기본명단"><option value="">저장된 기본명단 선택</option></select>
+                                <button id="btn-settings-roster-append" type="button" class="px-4 py-2 bg-brand-600 text-white rounded-xl">선택 명단 추가</button>
+                                <button id="btn-settings-roster-replace" type="button" class="px-4 py-2 border border-red-400 text-red-700 rounded-xl">선택 명단으로 교체</button>
+                            </div>
+                            <div class="flex flex-wrap gap-2">
+                                <button id="btn-edit-bundle-roster" type="button" class="px-4 py-2 border border-gray-400 rounded-xl">현재 명단 직접 수정·삭제</button>
+                                <span class="text-sm text-gray-500 self-center">또는 아래에서 PDF·Excel 파일을 바로 추가/교체하세요.</span>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                <div id="roster-drop-zone" role="button" tabindex="0" aria-label="현재 연수 명단 파일 선택 또는 드래그 업로드" class="border-2 border-dashed border-brand-300 rounded-xl p-6 text-center bg-brand-50 cursor-pointer">
+                                    <i class="fas fa-file-upload text-3xl text-brand-500 mb-2"></i><p class="font-medium text-brand-800">클릭하거나 파일을 드래그하세요</p><p class="text-xs text-brand-600">PDF, XLSX, XLS, CSV, TXT</p>
+                                </div>
+                                <div class="space-y-3">
+                                    <textarea id="textarea-roster-paste" class="w-full h-28 border rounded-xl p-3 text-sm" placeholder="소속 직급 성명 형식의 명단을 붙여넣으세요."></textarea>
+                                    <button id="btn-parse-text-roster" type="button" class="w-full bg-gray-800 text-white py-2 rounded-xl">붙여넣은 명단 반영</button>
+                                </div>
+                            </div>
+                            <input id="roster-file-input" type="file" accept=".pdf,.xlsx,.xls,.csv,.txt" class="hidden">
+                            <div class="flex flex-wrap gap-5">
+                                <label class="flex items-center gap-2"><input id="radio-roster-append" type="radio" name="roster-mode" value="append" checked>기존 명단에 추가</label>
+                                <label class="flex items-center gap-2 text-red-700"><input id="radio-roster-replace" type="radio" name="roster-mode" value="replace">기존 명단·서명을 지우고 교체</label>
+                            </div>
+                            <div id="file-upload-status" class="text-sm text-green-700"></div>
+                        </div>
 
                         <div class="bg-white p-6 rounded-xl border">
                             <h3 class="font-bold">관리자 인증</h3>
@@ -486,6 +513,7 @@
 
                     </div>
                 </div>
+              </div>
             </div>
         </section>
 
@@ -685,18 +713,14 @@
                 <button id="btn-roster-add-row" class="px-4 py-2 border rounded">인원 추가</button>
                 <button id="btn-roster-save" class="px-4 py-2 bg-brand-600 text-white rounded">명단 저장</button>
             </div>
-            <div id="roster-apply-controls" class="flex flex-wrap gap-2 mt-4">
-                <select id="roster-apply-mode" class="px-3 py-2 border rounded" aria-label="연수 명단 적용 방식"><option value="append">기존 인원에 추가</option><option value="replace">이번 연수 명단 전체 교체</option></select>
-                <button id="btn-roster-apply" class="px-4 py-2 bg-gray-800 text-white rounded">이번 연수에 불러오기</button>
-            </div>
         </div>
     </div>
-    <script src="js/roster-manager.js?v=13"></script>
-    <script src="js/pdf-parser.js?v=13"></script>
-    <script src="js/signature-pad.js?v=13"></script>
-    <script src="js/gas-sync.js?v=13"></script>
-    <script src="js/pdf-generator.js?v=13"></script>
-    <script src="js/app.js?v=13"></script>
+    <script src="js/roster-manager.js?v=15"></script>
+    <script src="js/pdf-parser.js?v=15"></script>
+    <script src="js/signature-pad.js?v=15"></script>
+    <script src="js/gas-sync.js?v=15"></script>
+    <script src="js/pdf-generator.js?v=15"></script>
+    <script src="js/app.js?v=15"></script>
 
 </body>
 </html>

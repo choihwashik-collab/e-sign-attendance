@@ -2,13 +2,13 @@
 var REGISTRY_SHEET = '_eSignBundles';
 var ATTENDANCE_HEADERS = ['참석자ID', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '서명시각'];
 var REGISTRY_HEADERS = ['묶음ID', '묶음명', '생성일', '연수목록JSON', '장소', '주관', '확인부서', '확인자', '결재란표시', '결재단계JSON', '출석시트ID'];
-var API_VERSION = 11;
+var API_VERSION = 13;
 
 function doGet(e) {
   var p = e && e.parameter || {};
   if (p.action === 'ping') return jsonResponse({success:true, apiVersion:API_VERSION}, p.callback);
   if (p.action === 'listPublicBundles') {
-    var visible=listBundleSummaries_().filter(function(b){return isPublicOpen_(b.id);});
+    var visible=listBundleSummaries_().filter(function(b){return isPublicOpen_(b.id);}).map(publicBundleSummary_);
     return jsonResponse({success:true,bundles:visible},p.callback);
   }
   if (p.action === 'getPublicBundle' && /^[a-zA-Z0-9_-]{1,100}$/.test(p.bundleId || '') && isPublicOpen_(p.bundleId)) {
@@ -89,12 +89,14 @@ function bundleView_(bundle, admin) {
   if (!bundle) return null;
   bundle.revision = control_(bundle.id).revision || 0;
   if (admin) return bundle;
-  return {id:bundle.id, name:bundle.name, sessions:bundle.sessions, createdAt:bundle.createdAt, revision:bundle.revision,
+  return {id:bundle.id, name:bundle.name, sessions:bundle.sessions.map(publicSession_), createdAt:bundle.createdAt, revision:bundle.revision,
     attendees:bundle.attendees.map(function(a){
       return {id:a.id, department:a.department, name:a.name, isSigned:a.isSigned,
         status:a.isSigned ? '서명완료' : (a.signedAt ? '처리완료' : '미서명'), signedAt:a.signedAt || null};
     })};
 }
+function publicSession_(s){return {id:s.id,title:s.title,date:s.date};}
+function publicBundleSummary_(b){return {id:b.id,name:b.name,sessions:(b.sessions||[]).map(publicSession_),createdAt:b.createdAt,revision:b.revision,attendees:[],summary:true};}
 
 function dispatch_(p, admin) {
   if (['listRosters','saveRoster','deleteRoster'].indexOf(p.action)>=0) {
@@ -108,6 +110,20 @@ function dispatch_(p, admin) {
   if (p.action === 'listBundles') {
     if (!admin) throw new Error('관리자 전용 요청입니다.');
     return {success:true, bundles:listBundleSummaries_()};
+  }
+  if (p.action === 'adminOverview') {
+    if (!admin) throw new Error('관리자 전용 요청입니다.');
+    return {success:true, bundles:adminOverview_()};
+  }
+  if (p.action === 'getAppSettings') {
+    if (!admin) throw new Error('관리자 전용 요청입니다.');
+    return {success:true, settings:getAppSettings_()};
+  }
+  if (p.action === 'saveAppSettings') {
+    if (!admin) throw new Error('관리자 전용 요청입니다.');
+    var appSettings=validateAppSettings_(p.settings);
+    PropertiesService.getScriptProperties().setProperty('APP_SETTINGS',JSON.stringify(appSettings));
+    return {success:true,settings:appSettings};
   }
   var id = p.bundleId || (p.bundle && p.bundle.id);
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(id || '')) throw new Error('묶음 ID가 올바르지 않습니다.');
@@ -181,6 +197,31 @@ function dispatch_(p, admin) {
   throw new Error('지원하지 않는 요청입니다.');
 }
 
+function getAppSettings_() {
+  return validateAppSettings_(parseJson_(PropertiesService.getScriptProperties().getProperty('APP_SETTINGS'),{}));
+}
+function validateAppSettings_(value) {
+  var s=value&&typeof value==='object'?value:{};
+  var stages=Array.isArray(s.approvalStages)?s.approvalStages.map(function(v){return text_(v,60,false);}).filter(String).slice(0,8):['담당','확인','부서장'];
+  return {location:text_(s.location,200,false),organizer:text_(s.organizer,200,false),verifierDept:text_(s.verifierDept,200,false),
+    verifierName:text_(s.verifierName,200,false),showApprovalBox:s.showApprovalBox===true,approvalStages:stages.length?stages:['담당','확인','부서장']};
+}
+
+function adminOverview_() {
+  var ss=SpreadsheetApp.getActiveSpreadsheet(),registry=getRegistry_(ss);
+  if(registry.getLastRow()<2)return [];
+  var rows=registry.getRange(2,1,registry.getLastRow()-1,REGISTRY_HEADERS.length).getValues();
+  return rows.filter(function(r){return !!r[0];}).map(function(r){
+    var sheet=ss.getSheetById(Number(r[10])),total=0,signed=0,processed=0;
+    if(sheet&&sheet.getLastRow()>1){
+      var values=sheet.getRange(2,5,sheet.getLastRow()-1,4).getValues();
+      values.forEach(function(a){if(!a[0]&&!a[2]&&!a[3])return;total++;if(a[2])signed++;if(a[2]||a[3]||(a[0]&&a[0]!=='미서명'))processed++;});
+    }
+    return {id:String(r[0]),name:String(r[1]||''),createdAt:dateString_(r[2]),sessions:parseJson_(r[3],[]),revision:control_(String(r[0])).revision||0,
+      total:total,signed:signed,processed:processed};
+  }).sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
+}
+
 function nextTimestamp_(prior) {
   return new Date(Math.max(Date.now(),(Date.parse(prior)||0)+1)).toISOString();
 }
@@ -245,8 +286,16 @@ function validateBundle_(b, prior) {
   if (!b || !Array.isArray(b.attendees) || b.attendees.length>200 || !Array.isArray(b.sessions) || !b.sessions.length || b.sessions.length>30) throw new Error('묶음은 연수 1~30개, 참석자 최대 200명입니다.');
   var attendees=b.attendees.map(validateAttendee_), ids={};
   attendees.forEach(function(a){if(ids[a.id]) throw new Error('참석자 ID가 중복됩니다.'); ids[a.id]=true;});
+  var sessionIds={};
   var clean={id:b.id,name:text_(b.name,200,true),createdAt:new Date().toISOString(),attendees:attendees,
-    sessions:b.sessions.map(function(s){return {id:text_(s.id,100,true),title:text_(s.title,200,true),date:text_(s.date,30,true)};}),
+    sessions:b.sessions.map(function(s){
+      var id=text_(s.id,100,true);if(sessionIds[id])throw new Error('연수 ID가 중복됩니다.');sessionIds[id]=true;
+      return {id:id,title:text_(s.title,200,true),date:text_(s.date,30,true),
+        location:text_(s.location===undefined?b.location:s.location,200,false),organizer:text_(s.organizer===undefined?b.organizer:s.organizer,200,false),
+        verifierDept:text_(s.verifierDept===undefined?b.verifierDept:s.verifierDept,100,false),verifierName:text_(s.verifierName===undefined?b.verifierName:s.verifierName,100,false),
+        showApprovalBox:s.showApprovalBox===undefined?!!b.showApprovalBox:!!s.showApprovalBox,
+        approvalStages:(Array.isArray(s.approvalStages)?s.approvalStages:(Array.isArray(b.approvalStages)?b.approvalStages:[])).slice(0,8).map(function(v){return text_(v,30,true);})};
+    }),
     location:text_(b.location,200,false),organizer:text_(b.organizer,200,false),verifierDept:text_(b.verifierDept,100,false),verifierName:text_(b.verifierName,100,false),
     showApprovalBox:!!b.showApprovalBox,approvalStages:(Array.isArray(b.approvalStages)?b.approvalStages:[]).slice(0,8).map(function(s){return text_(s,30,true);})};
   // Only NEW roster entries may import a locally saved signature during explicit migration.

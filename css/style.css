@@ -20,6 +20,20 @@
 .roster-editor th { background: #f9fafb; position: sticky; top: 0; }
 .roster-editor button { color: #dc2626; white-space: nowrap; }
 .file-drag-active { background: #dcfce7 !important; border-color: #15803d !important; box-shadow: 0 0 0 3px rgba(21,128,61,.18); }
+.admin-summary-card { display:flex; flex-direction:column; gap:6px; padding:18px; border:1px solid #e2e8f0; border-radius:16px; background:#fff; box-shadow:0 1px 3px rgba(15,23,42,.06); }
+.admin-summary-card span { color:#64748b; font-size:13px; }
+.admin-summary-card strong { color:#0f172a; font-size:28px; line-height:1; }
+.admin-summary-card.admin-summary-success { border-color:#bbf7d0; background:#f0fdf4; }
+.admin-summary-card.admin-summary-success strong { color:#15803d; }
+.admin-field-label { display:block; margin-bottom:4px; color:#374151; font-size:13px; font-weight:600; }
+.admin-field-input { width:100%; border:1px solid #d1d5db; border-radius:10px; padding:9px 12px; outline:none; }
+.admin-field-input:focus { border-color:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,.15); }
+.admin-bundle-session { display:inline-flex; align-items:center; gap:6px; border:1px solid #bfdbfe; border-radius:999px; padding:7px 11px; background:#eff6ff; color:#1d4ed8; font-size:13px; font-weight:600; }
+.admin-bundle-session:hover { background:#dbeafe; }
+.admin-monitor-bar { height:7px; overflow:hidden; border-radius:999px; background:#e2e8f0; }
+.admin-monitor-bar > span { display:block; height:100%; border-radius:inherit; background:#22c55e; }
+.admin-monitor-title { width:100%; min-width:0; }
+@media (min-width:640px) { .admin-monitor-title { width:40%; } }
 
 body {
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
@@ -91,81 +105,53 @@ body {
   pointer-events: none;
 }
 
-/* 인쇄 및 PDF 생성용 A4 공식 서명부 스타일 */
+/* A4 서명부: 한 페이지에 25행 x 2열. 각 페이지를 독립 렌더링하여 행 잘림을 방지한다. */
+#pdf-preview-area { display:flex; flex-direction:column; gap:18px; align-items:center; padding:0; background:transparent; box-shadow:none; max-width:none; }
+.attendance-page {
+  width:210mm; height:297mm; padding:8mm; margin:0 auto; background:#fff; color:#111827;
+  box-sizing:border-box; overflow:hidden; display:flex; flex-direction:column;
+  font-family:'Pretendard','Malgun Gothic',sans-serif; box-shadow:0 4px 14px rgba(15,23,42,.14);
+  break-after:page; page-break-after:always; break-inside:avoid; page-break-inside:avoid;
+}
+.attendance-page:last-child { break-after:auto; page-break-after:auto; }
+.attendance-header { height:20mm; flex:none; display:flex; justify-content:space-between; align-items:flex-start; border-bottom:1.5px solid #111827; padding-bottom:2mm; }
+.attendance-heading h1 { margin:0 0 1mm; font-size:18px; line-height:1.15; font-weight:800; letter-spacing:-.3px; }
+.attendance-heading p { margin:0; font-size:10px; color:#475569; }
+.attendance-meta { height:10mm; flex:none; display:grid; grid-template-columns:1fr 1.15fr 1.15fr auto; gap:2mm; align-items:center; font-size:9px; border:1px solid #cbd5e1; background:#f8fafc; padding:0 2mm; margin:2mm 0; box-sizing:border-box; }
+.attendance-meta span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.attendance-meta strong { margin-right:1mm; }
+.attendance-meta .page-count { font-weight:700; }
+.attendance-columns { flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr; gap:3mm; align-items:stretch; }
+.attendance-table { width:100%; height:100%; table-layout:fixed; border-collapse:collapse; }
+.attendance-table th,.attendance-table td { border:1px solid #1f2937; padding:.5mm; text-align:center; vertical-align:middle; font-size:8.5px; line-height:1.1; overflow:hidden; }
+.attendance-table th { height:6mm; box-sizing:border-box; background:#e2e8f0; font-size:9px; font-weight:700; }
+.attendance-table .attendance-row { height:7.55mm; }
+.attendance-table .col-number { width:8mm; }
+.attendance-table .col-dept { width:27mm; white-space:nowrap; text-overflow:ellipsis; }
+.attendance-table .col-name { width:20mm; font-weight:600; white-space:nowrap; text-overflow:ellipsis; }
+.attendance-table .col-sign { width:auto; padding:.25mm; }
+.attendance-table .col-sign img { display:block; max-width:31mm; max-height:6.5mm; object-fit:contain; margin:auto; }
+.attendance-reason { display:block; color:#475569; font-size:7.5px; line-height:1.05; white-space:normal; word-break:keep-all; }
+.attendance-footer { height:17mm; flex:none; display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:5mm; padding:2mm 2mm 0; font-size:9px; box-sizing:border-box; }
+.attendance-footer strong { font-size:10px; }
+.approval-box { border-collapse:collapse; font-size:7.5px; }
+.approval-box th,.approval-box td { border:1px solid #374151; text-align:center; padding:.6mm 1.5mm; min-width:12mm; height:5.5mm; box-sizing:border-box; }
+.approval-box th { background:#f8fafc; }
+.approval-box .approval-label { min-width:5mm; padding:.5mm; }
+
+@media (max-width:850px) {
+  #pdf-preview-area { align-items:flex-start; }
+  .attendance-page { transform-origin:top left; box-shadow:none; }
+}
 @media print {
-  body * {
-    visibility: hidden;
-  }
-  #print-document, #print-document * {
-    visibility: visible;
-  }
-  #print-document {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    margin: 0;
-    padding: 15mm;
-    background: white;
-  }
-  .no-print {
-    display: none !important;
-  }
-}
-
-.a4-preview-paper {
-  width: 210mm;
-  min-height: 297mm;
-  padding: 18mm 15mm;
-  margin: 0 auto;
-  background: white;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  box-sizing: border-box;
-  font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
-  color: #111827;
-}
-
-@media (max-width: 850px) {
-  .a4-preview-paper {
-    width: 100%;
-    min-height: auto;
-    padding: 15px;
-  }
-}
-
-/* 출석부 표 스타일 */
-.doc-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 10px;
-}
-
-.doc-table th, 
-.doc-table td {
-  border: 1px solid #374151;
-  padding: 6px 8px;
-  text-align: center;
-  font-size: 12px;
-  vertical-align: middle;
-}
-
-.doc-table th {
-  background-color: #f3f4f6;
-  font-weight: 600;
-  color: #111827;
-}
-
-.doc-table td.signature-cell {
-  padding: 2px 4px;
-  height: 44px;
-}
-
-.doc-table td.signature-cell img {
-  max-height: 38px;
-  max-width: 90px;
-  margin: 0 auto;
-  display: block;
-  object-fit: contain;
+  @page { size:A4 portrait; margin:0; }
+  body { margin:0 !important; background:#fff !important; }
+  body * { visibility:hidden !important; }
+  #view-admin,#admin-bundle-detail,#admin-bundle-detail .bg-white,#admin-bundle-detail .p-4,#tab-pane-document,.pdf-paper-shell,#pdf-preview-area,
+  #pdf-preview-area * { visibility:visible !important; }
+  #view-admin,#admin-bundle-detail,#admin-bundle-detail .bg-white,#admin-bundle-detail .p-4,#tab-pane-document,.pdf-paper-shell,#pdf-preview-area { display:block !important; margin:0 !important; padding:0 !important; border:0 !important; background:#fff !important; min-height:0 !important; box-shadow:none !important; }
+  #pdf-preview-area { position:absolute; left:0; top:0; width:210mm; }
+  .attendance-page { box-shadow:none; margin:0; }
 }
 
 #busy-indicator {
@@ -178,24 +164,3 @@ body {
 .busy-spinner { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,.35); border-top-color: white; border-radius: 50%; animation: busy-spin .75s linear infinite; flex: none; }
 .app-busy button, .app-busy [role="button"] { pointer-events: none; opacity: .7; }
 @keyframes busy-spin { to { transform: rotate(360deg); } }
-
-/* 결재란 스타일 */
-.approval-box {
-  border-collapse: collapse;
-  font-size: 11px;
-}
-
-.approval-box th, .approval-box td {
-  border: 1px solid #374151;
-  text-align: center;
-  padding: 4px 8px;
-}
-
-.approval-box th {
-  background-color: #f9fafb;
-}
-
-.approval-box td.sign-space {
-  height: 48px;
-  width: 65px;
-}

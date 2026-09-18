@@ -16,10 +16,12 @@ const RosterManager = {
     this.renderRosterSelect();
   },
   renderRosterSelect(selectedId='') {
-    const select=document.getElementById('saved-roster-select');select.replaceChildren();
-    const empty=document.createElement('option');empty.value='';empty.textContent='기본명단 선택';select.appendChild(empty);
-    for(const roster of this.rosters){const option=document.createElement('option');option.value=roster.id;option.textContent=roster.name+' ('+roster.attendees.length+'명)';select.appendChild(option);}
-    if(selectedId)select.value=selectedId;
+    for(const id of ['saved-roster-select','settings-basic-roster-select']){
+      const select=document.getElementById(id);if(!select)continue;const previous=selectedId||select.value;select.replaceChildren();
+      const empty=document.createElement('option');empty.value='';empty.textContent=id==='settings-basic-roster-select'?'저장된 기본명단 선택':'기본명단 선택';select.appendChild(empty);
+      for(const roster of this.rosters){const option=document.createElement('option');option.value=roster.id;option.textContent=roster.name+' ('+roster.attendees.length+'명)';select.appendChild(option);}
+      if(previous&&this.rosters.some(r=>r.id===previous))select.value=previous;
+    }
   },
   async open(target='template') {
     App.requireAdmin();
@@ -36,7 +38,6 @@ const RosterManager = {
     document.getElementById('roster-editor-name').value=this.draft.name;
     document.getElementById('roster-editor-name').disabled=this.target==='bundle';
     document.getElementById('roster-template-controls').classList.toggle('hidden',this.target==='bundle');
-    document.getElementById('roster-apply-controls').classList.toggle('hidden',this.target==='bundle');
     document.getElementById('btn-roster-delete').disabled=!this.draft.revision && !this.rosters.some(r=>r.id===this.draft.id);
     const body=document.getElementById('roster-editor-body');body.replaceChildren();
     this.draft.attendees.forEach((person,index)=>{
@@ -105,18 +106,16 @@ const RosterManager = {
     this.markDirty();this.render();
     App.message(people.length+'명을 기본명단 편집기에 불러왔습니다. 내용을 확인한 뒤 [명단 저장]을 누르세요.');
   },
-  async apply() {
+  async applySelected(mode) {
     App.requireAdmin();
-    if(this.target!=='template'||!AppState.currentBundle)throw new Error('적용할 연수를 먼저 선택하세요.');
-    if(this.dirty)throw new Error('기본명단을 먼저 저장하세요.');
-    const saved=this.rosters.find(r=>r.id===this.draft.id);
-    if(!saved)throw new Error('기본명단을 먼저 저장하세요.');
-    const replace=document.getElementById('roster-apply-mode').value==='replace';
+    if(!AppState.currentBundle)throw new Error('적용할 연수 그룹을 먼저 선택하세요.');
+    const id=document.getElementById('settings-basic-roster-select').value,saved=this.rosters.find(r=>r.id===id);
+    if(!saved)throw new Error('불러올 기본명단을 선택하세요.');
+    const replace=mode==='replace';
     if(replace && AppState.currentBundle.attendees.length && !confirm('이번 연수의 기존 명단과 서명·사유를 모두 교체할까요?'))return;
     const people=this.people(saved.attendees).map(p=>({...p,id:'att_'+GasSync.randomHex(16),status:'미서명',note:'',signatureData:null,signedAt:null,isSigned:false}));
     await App.editBundle(b=>{b.attendees=replace?people:b.attendees.concat(people);});
-    App.message('기본명단을 이번 연수에 복사했습니다. [이번 연수 명단 수정]에서 일부 인원을 추가·수정·삭제할 수 있습니다.');
-    this.close();
+    App.message(saved.name+' 명단을 현재 연수 그룹에 '+(replace?'교체':'추가')+'했습니다. [현재 명단 직접 수정·삭제]에서 조정할 수 있습니다.');
   },
   async remove() {
     App.requireAdmin();
@@ -146,7 +145,9 @@ const RosterManager = {
       this.draft.attendees.push({id:'att_'+GasSync.randomHex(16),department:'',name:'',position:'',status:'미서명',note:'',signatureData:null,signedAt:null,isSigned:false});
       this.markDirty();this.render();
     });
-    on('btn-roster-save',()=>this.save());on('btn-roster-apply',()=>this.apply());on('btn-roster-delete',()=>this.remove());
+    on('btn-roster-save',()=>this.save());on('btn-roster-delete',()=>this.remove());
+    on('btn-settings-roster-append',()=>this.applySelected('append'));
+    on('btn-settings-roster-replace',()=>this.applySelected('replace'));
     App.bindFileUpload({inputId:'basic-roster-file-input',triggerId:'btn-basic-roster-upload',dropZoneId:'basic-roster-drop-zone',onFile:file=>this.importFile(file)});
     document.getElementById('btn-roster-close').addEventListener('click',()=>{if(!App.busy)this.close();});
     document.getElementById('roster-editor-name').addEventListener('input',()=>{this.draft.name=document.getElementById('roster-editor-name').value;this.markDirty();});

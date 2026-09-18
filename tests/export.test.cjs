@@ -39,3 +39,16 @@ test('downloadable basic roster template has the requested columns and numbered 
   const parsed=await context.window.ListParser.parseExcel({arrayBuffer:async()=>uploadBuffer});
   assert.equal(parsed.length,1);assert.deepEqual([parsed[0].department,parsed[0].position,parsed[0].name],['교무부','교사','가상인물']);
 });
+test('PDF preview uses two 25-row columns, keeps 100 people to two pages, and separates sessions',()=>{
+  const target={innerHTML:''},context=vm.createContext({console,Date,window:{},document:{getElementById:id=>id==='pdf-preview-area'?target:null}});
+  vm.runInContext(fs.readFileSync('js/pdf-generator.js','utf8'),context);
+  const people=Array.from({length:100},(_,i)=>({id:'a'+i,department:'부서'+(i%5),name:'참석자'+String(i+1).padStart(3,'0'),position:'교사',isSigned:false,status:'미서명'}));
+  const bundle={name:'9월 연수 그룹',sessions:[{id:'s1',title:'청렴 연수',date:'2026-09-11'},{id:'s2',title:'안전 연수',date:'2026-09-12'}]};
+  context.window.PdfGenerator.renderPreviewDocument(bundle,people);
+  assert.equal((target.innerHTML.match(/class="attendance-page"/g)||[]).length,4);
+  assert.equal((target.innerHTML.match(/class="attendance-table"/g)||[]).length,8);
+  assert.equal((target.innerHTML.match(/class="attendance-row"/g)||[]).length,200);
+  assert.equal((target.innerHTML.match(/청렴 연수/g)||[]).length,2);assert.equal((target.innerHTML.match(/안전 연수/g)||[]).length,2);
+  assert.match(target.innerHTML,/<th class="col-number">연번<\/th><th class="col-dept">부서<\/th><th class="col-name">성명<\/th><th class="col-sign">서명<\/th>/);
+  assert.doesNotMatch(target.innerHTML,/>직급<|>비고</);
+});

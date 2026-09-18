@@ -26,19 +26,22 @@ const GasSync = {
   async testConnection(url = this.getScriptUrl()) {
     if (!this.isValidUrl(url)) return {success:false,message:'연동 주소가 없습니다.'};
     const result = await this._jsonpRequest(url,{action:'ping'});
-    const success = result?.success && result.apiVersion === 11;
+    const success = result?.success && result.apiVersion === 13;
     return {success:!!success,message:success?'서버 연결 확인':'서버 업데이트 또는 연결 확인이 필요합니다.'};
   },
   async login(key) {
     if (typeof key !== 'string' || key.length < 32) throw new Error('스크립트 속성의 관리자 키(32자 이상)를 입력하세요.');
     const result = await this._post({action:'login'},key);
-    if (result.apiVersion !== 11) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
+    if (result.apiVersion !== 13) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
     this.adminKey = key;
     this.participant = null;
     return result;
   },
   logout() { this.adminKey=''; this.participant=null; },
   async fetchBundles() { return (await this._post({action:'listBundles'})).bundles; },
+  async fetchAdminOverview() { return (await this._post({action:'adminOverview'})).bundles; },
+  async fetchAppSettings() { return (await this._post({action:'getAppSettings'})).settings; },
+  async saveAppSettings(settings) { return (await this._post({action:'saveAppSettings',settings})).settings; },
   async fetchPublicBundles() { const r=await this._jsonpRequest(this.getScriptUrl(),{action:'listPublicBundles'});if(!r?.success)throw new Error('공개 연수 목록을 불러오지 못했습니다.');return r.bundles; },
   async fetchBundle(bundleId) {
     if(!this.adminKey&&!this.participant){const r=await this._jsonpRequest(this.getScriptUrl(),{action:'getPublicBundle',bundleId});if(!r?.success)throw new Error(r?.message||'연수를 불러오지 못했습니다.');return r.bundle;}

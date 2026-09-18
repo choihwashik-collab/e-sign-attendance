@@ -5,7 +5,8 @@ function escapeHtml(value) {
 const AppState = {
   bundles:[],currentBundle:null,selectedDepartment:'ALL',searchQuery:'',
   selectedAttendeeForSign:null,selectedAttendeeForAbsent:null,signaturePad:null,
-  currentView:'home',isAdminAuthenticated:false,isSyncing:false,tempBundleSessions:[]
+  currentView:'home',isAdminAuthenticated:false,isSyncing:false,tempBundleSessions:[],selectedSettingsSessionId:null,
+  adminOverview:[],adminPage:'overview',appSettings:{location:'',organizer:'',verifierDept:'',verifierName:'',showApprovalBox:false,approvalStages:['담당','확인','부서장']}
 };
 const App = {
   localMode:false,busy:false,settingsDirty:false,syncInterval:null,share:null,rosterDirty:false,
@@ -85,10 +86,11 @@ const App = {
     const login=await GasSync.login(key);
     const bundles=Array.isArray(login.bundles)?login.bundles:await GasSync.fetchBundles();
     this.localMode=false;AppState.isAdminAuthenticated=true;AppState.bundles=bundles;AppState.currentBundle=null;
+    [AppState.adminOverview,AppState.appSettings]=await Promise.all([GasSync.fetchAdminOverview(),GasSync.fetchAppSettings()]);
     document.getElementById('input-admin-pw').value='';
     document.getElementById('modal-admin-password').classList.add('hidden');
     history.replaceState(null,'',location.pathname);
-    this.switchView('home');this.updateGasStatusBadge(true);
+    this.switchView('admin');this.updateGasStatusBadge(true);
     this.message('로그인했습니다. 연수를 선택하거나 새로 만드세요.');
   },
   useLocalMode() {
@@ -97,14 +99,16 @@ const App = {
     const stored=JSON.parse(localStorage.getItem('eSign_bundles') || '[]');
     if(!Array.isArray(stored))throw new Error('로컬 자료 형식이 올바르지 않습니다.');
     AppState.bundles=stored;AppState.currentBundle=null;
+    AppState.appSettings=JSON.parse(localStorage.getItem('eSign_appSettings')||'null')||AppState.appSettings;
+    AppState.adminOverview=this.localAdminOverview();
     document.getElementById('modal-admin-password').classList.add('hidden');
     history.replaceState(null,'',location.pathname);
-    this.switchView('home');this.updateGasStatusBadge(false);
+    this.switchView('admin');this.updateGasStatusBadge(false);
     this.message('단일 기기 모드: 서명은 이 브라우저에만 저장됩니다. 브라우저 자료 삭제 전 JSON 백업을 받으세요.');
   },
   logout() {
     GasSync.logout();clearInterval(this.syncInterval);this.share=null;this.localMode=false;this.settingsDirty=false;
-    AppState.isAdminAuthenticated=false;AppState.bundles=[];AppState.currentBundle=null;AppState.selectedAttendeeForSign=null;
+    AppState.isAdminAuthenticated=false;AppState.bundles=[];AppState.currentBundle=null;AppState.selectedAttendeeForSign=null;AppState.adminOverview=[];
     AppState.signaturePad?.clear();
     window.RosterManager?.reset();
     for(const id of ['participant-name-list','admin-attendee-table-body','pdf-preview-area','admin-qr-code-container','large-qr-code-container'])document.getElementById(id)?.replaceChildren();
@@ -123,7 +127,9 @@ const App = {
     if(!this.localMode && refresh)b=await GasSync.fetchBundle(id);
     if(!b)throw new Error('연수를 찾을 수 없습니다.');
     this.acceptBundle(b);AppState.currentBundle=b;AppState.selectedDepartment='ALL';AppState.searchQuery='';
-    this.settingsDirty=false;this.updateHeaderInfo();this.renderParticipantView();this.renderAdminOverview();this.renderBundleSessionsInSettings();
+    this.settingsDirty=false;
+    if(!b.sessions.some(s=>s.id===AppState.selectedSettingsSessionId))AppState.selectedSettingsSessionId=b.sessions[0]?.id||null;
+    this.updateHeaderInfo();this.renderParticipantView();this.renderAdminOverview();this.renderBundleSessionsInSettings();
     this.startPeriodicSync();
   },
   startPeriodicSync() {
@@ -158,9 +164,10 @@ const App = {
   },
   async createBundle(name,sessions) {
     this.requireAdmin();
-    const b={id:'bundle_'+GasSync.randomHex(16),name,createdAt:new Date().toISOString(),sessions,attendees:[],
+    const defaults=this.defaultSessionFields();
+    const b={id:'bundle_'+GasSync.randomHex(16),name,createdAt:new Date().toISOString(),sessions:sessions.map(s=>({...defaults,...s})),attendees:[],
       location:'',organizer:'',verifierDept:'',verifierName:'',showApprovalBox:false,approvalStages:['담당','확인','부서장']};
-    this.acceptBundle(this.localMode?b:(await GasSync.syncBundle(b)).bundle);this.renderBundleList();
+    this.acceptBundle(this.localMode?b:(await GasSync.syncBundle(b)).bundle);await this.refreshAdminHub();this.renderBundleList();
     this.message('연수 묶음을 생성했습니다.');
   },
   async deleteBundle(id) {
@@ -175,8 +182,17 @@ const App = {
     if(this.share?.bundleId===id)this.share=null;
     this.switchView('home');this.message('묶음을 삭제했습니다. 앱 내 복구 기능은 없으며 백업이 필요합니다.');
   },
-  async addSessionToBundle(id,title,date) {await this.editBundle(b=>b.sessions.push({id:'sess_'+GasSync.randomHex(16),title,date}));},
-  async removeSessionFromBundle(id,sid) {await this.editBundle(b=>{b.sessions=b.sessions.filter(s=>s.id!==sid);});},
+  async addSessionToBundle(id,title,date) {
+    const sid='sess_'+GasSync.randomHex(16);AppState.selectedSettingsSessionId=sid;
+    await this.editBundle(b=>b.sessions.push({id:sid,title,date,...this.defaultSessionFields()}));
+    this.updateHeaderInfo();
+  },
+  async removeSessionFromBundle(id,sid) {
+    const remaining=AppState.currentBundle.sessions.filter(s=>s.id!==sid);
+    if(!remaining.length)throw new Error('연수 그룹에는 최소 1개의 연수가 필요합니다.');
+    if(AppState.selectedSettingsSessionId===sid)AppState.selectedSettingsSessionId=remaining[0].id;
+    await this.editBundle(b=>{b.sessions=b.sessions.filter(s=>s.id!==sid);});this.updateHeaderInfo();
+  },
   switchView(view) {
     if(view==='admin'&&!AppState.isAdminAuthenticated){this.showAdminPasswordModal();return;}
     AppState.currentView=view;
@@ -189,7 +205,77 @@ const App = {
     document.getElementById('btn-basic-rosters-home').classList.toggle('hidden',!AppState.isAdminAuthenticated);
     if(view==='home')this.renderBundleList();
     if(view==='participant')this.renderParticipantView();
-    if(view==='admin'&&AppState.currentBundle){this.renderAdminOverview();this.renderPdfPreview();this.renderAdminQrCode();}
+    if(view==='admin'){
+      this.switchAdminPage(AppState.adminPage||'overview',false);
+      if(!this.busy)this.perform(()=>this.refreshAdminHub());
+    }
+  },
+  defaultSessionFields() {
+    const s=AppState.appSettings||{};
+    return {location:s.location||'',organizer:s.organizer||'',verifierDept:s.verifierDept||'',verifierName:s.verifierName||'',
+      showApprovalBox:s.showApprovalBox===true,approvalStages:Array.isArray(s.approvalStages)?[...s.approvalStages]:['담당','확인','부서장']};
+  },
+  localAdminOverview() {
+    return AppState.bundles.map(b=>({id:b.id,name:b.name,createdAt:b.createdAt,sessions:b.sessions||[],total:(b.attendees||[]).length,
+      signed:(b.attendees||[]).filter(a=>a.isSigned&&a.signatureData).length,processed:(b.attendees||[]).filter(a=>a.signedAt||a.isSigned).length}));
+  },
+  async refreshAdminHub() {
+    if(!AppState.isAdminAuthenticated)return;
+    if(this.localMode){AppState.adminOverview=this.localAdminOverview();}
+    else [AppState.adminOverview,AppState.appSettings]=await Promise.all([GasSync.fetchAdminOverview(),GasSync.fetchAppSettings()]);
+    this.renderAdminHub();
+  },
+  switchAdminPage(page,refreshRoster=true) {
+    AppState.adminPage=page==='setup'?'setup':'overview';
+    document.querySelectorAll('.admin-main-page').forEach(el=>el.classList.add('hidden'));
+    document.getElementById('admin-bundle-detail')?.classList.add('hidden');
+    document.getElementById('admin-page-'+AppState.adminPage)?.classList.remove('hidden');
+    document.querySelectorAll('.admin-main-tab-btn').forEach(btn=>{
+      const active=btn.dataset.adminPage===AppState.adminPage;btn.classList.toggle('bg-brand-600',active);btn.classList.toggle('text-white',active);btn.classList.toggle('text-gray-600',!active);
+    });
+    this.renderAdminHub();
+    if(AppState.adminPage==='setup'&&refreshRoster&&window.RosterManager)this.perform(()=>RosterManager.refresh());
+  },
+  async openAdminBundle(id,sessionId=null,tab='settings') {
+    await this.selectBundle(id);
+    if(sessionId&&AppState.currentBundle.sessions.some(s=>s.id===sessionId))AppState.selectedSettingsSessionId=sessionId;
+    this.updateHeaderInfo();this.renderBundleSessionsInSettings();this.renderAdminOverview();this.renderPdfPreview();this.renderAdminQrCode();
+    this.switchView('admin');
+    document.querySelectorAll('.admin-main-page').forEach(el=>el.classList.add('hidden'));
+    document.getElementById('admin-bundle-detail').classList.remove('hidden');
+    document.getElementById('admin-detail-title').textContent=AppState.currentBundle.name;
+    this.switchAdminTab(tab);
+    if(tab==='settings'&&window.RosterManager)await RosterManager.refresh();
+  },
+  renderAdminHub() {
+    const overview=Array.isArray(AppState.adminOverview)?AppState.adminOverview:[];
+    const totals=overview.reduce((a,b)=>({sessions:a.sessions+(b.sessions?.length||0),people:a.people+(b.total||0),signed:a.signed+(b.signed||0)}),{sessions:0,people:0,signed:0});
+    const set=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=value;};
+    set('admin-all-bundle-count',overview.length);set('admin-all-session-count',totals.sessions);set('admin-all-attendee-count',totals.people);set('admin-all-signed-count',totals.signed);
+    const list=document.getElementById('admin-overview-bundle-list');
+    if(list){list.replaceChildren();if(!overview.length)list.innerHTML='<div class="p-8 text-center text-gray-500">개설된 연수가 없습니다.</div>';
+      overview.forEach(bundle=>{
+        const row=document.createElement('div'),rate=bundle.total?Math.round((bundle.signed||0)*100/bundle.total):0;
+        row.className='p-5';row.innerHTML=`<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"><div><div class="flex flex-wrap items-center gap-2"><h3 class="text-lg font-bold">${escapeHtml(bundle.name)}</h3><span class="text-xs rounded-full bg-gray-100 px-2 py-1">${bundle.total||0}명 · 서명 ${bundle.signed||0}명 (${rate}%)</span></div><div class="flex flex-wrap gap-2 mt-3">${(bundle.sessions||[]).map(s=>`<button class="admin-bundle-session" data-bundle="${escapeHtml(bundle.id)}" data-session="${escapeHtml(s.id)}">${escapeHtml(s.title)} <span class="font-normal text-blue-500">${escapeHtml(s.date||'')}</span></button>`).join('')}</div></div><div class="flex flex-wrap gap-2 flex-shrink-0"><button class="btn-overview-roster px-3 py-2 rounded-lg border text-sm" data-id="${escapeHtml(bundle.id)}">기본명단 불러오기</button><button class="btn-overview-edit-roster px-3 py-2 rounded-lg border text-sm" data-id="${escapeHtml(bundle.id)}">명단 수정</button><button class="btn-overview-settings px-3 py-2 rounded-lg bg-gray-800 text-white text-sm" data-id="${escapeHtml(bundle.id)}">그룹 설정</button></div></div>`;
+        list.appendChild(row);
+      });
+      list.querySelectorAll('.admin-bundle-session').forEach(btn=>btn.addEventListener('click',()=>this.perform(()=>this.openAdminBundle(btn.dataset.bundle,btn.dataset.session,'settings'))));
+      list.querySelectorAll('.btn-overview-settings').forEach(btn=>btn.addEventListener('click',()=>this.perform(()=>this.openAdminBundle(btn.dataset.id,null,'settings'))));
+      list.querySelectorAll('.btn-overview-roster').forEach(btn=>btn.addEventListener('click',()=>this.perform(async()=>{await this.openAdminBundle(btn.dataset.id,null,'settings');this.message('기본명단을 선택해 추가하거나 교체하세요.');})));
+      list.querySelectorAll('.btn-overview-edit-roster').forEach(btn=>btn.addEventListener('click',()=>this.perform(async()=>{await this.selectBundle(btn.dataset.id);await RosterManager.open('bundle');})));
+    }
+    const monitor=document.getElementById('admin-session-monitor');
+    if(monitor){monitor.replaceChildren();if(!overview.length)monitor.innerHTML='<div class="p-8 text-center text-gray-500">모니터링할 연수가 없습니다.</div>';
+      overview.forEach(bundle=>(bundle.sessions||[]).forEach(session=>{const rate=bundle.total?Math.round((bundle.signed||0)*100/bundle.total):0,row=document.createElement('button');row.type='button';row.className='w-full text-left p-4 hover:bg-gray-50';row.innerHTML=`<div class="flex flex-col sm:flex-row sm:items-center gap-3"><div class="admin-monitor-title"><strong class="block truncate">${escapeHtml(session.title)}</strong><span class="text-xs text-gray-500">${escapeHtml(bundle.name)} · ${escapeHtml(session.date||'날짜 미정')}</span></div><div class="flex-1"><div class="admin-monitor-bar"><span style="width:${rate}%"></span></div></div><div class="text-sm font-bold whitespace-nowrap">${bundle.signed||0} / ${bundle.total||0}명 (${rate}%)</div></div>`;row.addEventListener('click',()=>this.perform(()=>this.openAdminBundle(bundle.id,session.id,'live')));monitor.appendChild(row);}));
+    }
+    const s=AppState.appSettings||{};for(const [id,key] of [['default-session-location','location'],['default-session-organizer','organizer'],['default-verifier-dept','verifierDept'],['default-verifier-name','verifierName']]){const el=document.getElementById(id);if(el)el.value=s[key]||'';}
+    const show=document.getElementById('default-show-approval');if(show)show.checked=s.showApprovalBox===true;const stages=document.getElementById('default-approval-stages');if(stages)stages.value=(s.approvalStages||[]).join(', ');
+  },
+  async saveDefaultSheetSettings() {
+    this.requireAdmin();const settings={location:document.getElementById('default-session-location').value.trim(),organizer:document.getElementById('default-session-organizer').value.trim(),verifierDept:document.getElementById('default-verifier-dept').value.trim(),verifierName:document.getElementById('default-verifier-name').value.trim(),showApprovalBox:document.getElementById('default-show-approval').checked,approvalStages:document.getElementById('default-approval-stages').value.split(',').map(v=>v.trim()).filter(Boolean)};
+    if(!settings.approvalStages.length)settings.approvalStages=['담당','확인','부서장'];
+    if(this.localMode){localStorage.setItem('eSign_appSettings',JSON.stringify(settings));AppState.appSettings=settings;}else AppState.appSettings=await GasSync.saveAppSettings(settings);
+    this.renderAdminHub();this.message('기본 서명부 설정을 저장했습니다. 이후 추가하는 연수부터 적용됩니다.');
   },
   switchAdminTab(name) {
     document.querySelectorAll('.admin-tab-btn').forEach(el=>el.classList.toggle('active',el.dataset.adminTab===name));
@@ -197,6 +283,7 @@ const App = {
     document.getElementById('tab-pane-'+name)?.classList.remove('hidden');
     if(name==='document')this.renderPdfPreview();
     if(name==='qr')this.renderAdminQrCode();
+    if(name==='settings'&&window.RosterManager&&!this.busy)this.perform(()=>RosterManager.refresh());
   },
   // Rendering
   renderBundleList: function() {
@@ -256,7 +343,7 @@ const App = {
 
     container.querySelectorAll('.btn-manage-bundle').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        this.perform(async () => { await this.selectBundle(e.target.dataset.id); this.switchView('admin'); });
+        this.perform(() => this.openAdminBundle(e.target.dataset.id,null,'live'));
       });
     });
 
@@ -459,11 +546,7 @@ const App = {
     const previewArea = document.getElementById('pdf-preview-area');
     if (previewArea) {
       if (AppState.currentBundle.sessions.length > 0) {
-        PdfGenerator.renderPreviewDocument(
-          AppState.currentBundle,
-          AppState.currentBundle.attendees,
-          AppState.currentBundle.sessions[0]
-        );
+        PdfGenerator.renderPreviewDocument(AppState.currentBundle,AppState.currentBundle.attendees);
       } else {
         previewArea.innerHTML = '<div class="text-center p-8 text-gray-500">연수가 없습니다. 설정에서 연수를 추가하세요.</div>';
       }
@@ -496,6 +579,10 @@ const App = {
     const bundle = AppState.currentBundle;
     document.getElementById('input-gas-url').value = this.getGasUrl();
     
+    if(!bundle.sessions.some(s=>s.id===AppState.selectedSettingsSessionId))AppState.selectedSettingsSessionId=bundle.sessions[0]?.id||null;
+    const session=bundle.sessions.find(s=>s.id===AppState.selectedSettingsSessionId)||bundle.sessions[0]||{};
+    const bundleName=document.getElementById('input-bundle-name-settings');
+    const sessionTitle=document.getElementById('input-session-title-settings'),sessionDate=document.getElementById('input-session-date-settings');
     const loc = document.getElementById('input-session-location');
     const org = document.getElementById('input-session-organizer');
     const vDept = document.getElementById('input-verifier-dept');
@@ -503,16 +590,19 @@ const App = {
     const showApp = document.getElementById('check-show-approval');
     const appStages = document.getElementById('input-approval-stages');
 
-    if(loc) loc.value = bundle.location || '';
-    if(org) org.value = bundle.organizer || '';
-    if(vDept) vDept.value = bundle.verifierDept || '';
-    if(vName) vName.value = bundle.verifierName || '';
-    if(showApp) showApp.checked = bundle.showApprovalBox || false;
-    if(appStages) appStages.value = bundle.approvalStages ? bundle.approvalStages.join(',') : '담당,확인,부서장';
+    if(bundleName)bundleName.value=bundle.name||'';
+    if(sessionTitle)sessionTitle.value=session.title||'';if(sessionDate)sessionDate.value=session.date||'';
+    if(loc) loc.value = session.location ?? bundle.location ?? '';
+    if(org) org.value = session.organizer ?? bundle.organizer ?? '';
+    if(vDept) vDept.value = session.verifierDept ?? bundle.verifierDept ?? '';
+    if(vName) vName.value = session.verifierName ?? bundle.verifierName ?? '';
+    if(showApp) showApp.checked = session.showApprovalBox ?? bundle.showApprovalBox ?? false;
+    const stages=Array.isArray(session.approvalStages)?session.approvalStages:bundle.approvalStages;
+    if(appStages) appStages.value = Array.isArray(stages) ? stages.join(',') : '담당,확인,부서장';
 
     const stageContainer = document.getElementById('approval-stages-container');
     if(stageContainer) {
-      if (bundle.showApprovalBox) {
+      if (showApp?.checked) {
         stageContainer.classList.remove('hidden');
       } else {
         stageContainer.classList.add('hidden');
@@ -544,21 +634,28 @@ const App = {
     
     AppState.currentBundle.sessions.forEach(sess => {
       const li = document.createElement('li');
-      li.className = 'flex justify-between items-center py-2 border-b';
+      const selected=sess.id===AppState.selectedSettingsSessionId;
+      li.className = 'flex justify-between items-center gap-2 p-2 border-b '+(selected?'bg-brand-100':'');
       li.innerHTML = `
-        <div>
-          <span class="font-medium">${escapeHtml(sess.title)}</span> <span class="text-sm text-gray-500">(${escapeHtml(sess.date)})</span>
-        </div>
+        <button type="button" class="btn-select-session flex-grow text-left px-2 py-2 rounded ${selected?'font-bold text-brand-800':'hover:bg-white'}" data-id="${escapeHtml(sess.id)}">
+          ${escapeHtml(sess.title)} <span class="text-sm text-gray-500">(${escapeHtml(sess.date)})</span>
+        </button>
         <button type="button" class="btn-del-session text-red-500 hover:text-red-700 text-sm" data-id="${escapeHtml(sess.id)}">삭제</button>
       `;
       container.appendChild(li);
     });
 
+    container.querySelectorAll('.btn-select-session').forEach(btn=>btn.addEventListener('click',e=>this.selectSettingsSession(e.currentTarget.dataset.id)));
     container.querySelectorAll('.btn-del-session').forEach(btn => {
       btn.addEventListener('click', (e) => {
         this.perform(() => this.removeSessionFromBundle(AppState.currentBundle.id, e.target.dataset.id));
       });
     });
+  },
+  selectSettingsSession(id) {
+    if(this.settingsDirty&&!confirm('저장하지 않은 선택 연수 설정을 버리고 다른 연수를 열까요?'))return;
+    if(!AppState.currentBundle?.sessions.some(s=>s.id===id))return;
+    this.settingsDirty=false;AppState.selectedSettingsSessionId=id;this.renderBundleSessionsInSettings();this.updateHeaderInfo();
   },
 
   // Signing is the only participant mutation; attendance identities come from the server roster.
@@ -695,14 +792,16 @@ const App = {
   },
   async saveSettings() {
     await this.editBundle(b=>{
-      b.location=document.getElementById('input-session-location').value.trim();
-      b.organizer=document.getElementById('input-session-organizer').value.trim();
-      b.verifierDept=document.getElementById('input-verifier-dept').value.trim();
-      b.verifierName=document.getElementById('input-verifier-name').value.trim();
-      b.showApprovalBox=document.getElementById('check-show-approval').checked;
-      b.approvalStages=document.getElementById('input-approval-stages').value.split(',').map(s=>s.trim()).filter(Boolean);
+      const session=b.sessions.find(s=>s.id===AppState.selectedSettingsSessionId);if(!session)throw new Error('수정할 연수를 선택하세요.');
+      b.name=document.getElementById('input-bundle-name-settings').value.trim();
+      session.title=document.getElementById('input-session-title-settings').value.trim();session.date=document.getElementById('input-session-date-settings').value;
+      session.location=document.getElementById('input-session-location').value.trim();session.organizer=document.getElementById('input-session-organizer').value.trim();
+      session.verifierDept=document.getElementById('input-verifier-dept').value.trim();session.verifierName=document.getElementById('input-verifier-name').value.trim();
+      session.showApprovalBox=document.getElementById('check-show-approval').checked;
+      session.approvalStages=document.getElementById('input-approval-stages').value.split(',').map(s=>s.trim()).filter(Boolean);
+      if(!b.name||!session.title||!session.date)throw new Error('그룹 이름, 연수명, 연수 일자를 모두 입력하세요.');
     }, true);
-    this.updateHeaderInfo();
+    this.updateHeaderInfo();this.renderPdfPreview();
   },
   async downloadBackup() {
     this.requireAdmin();
@@ -757,7 +856,13 @@ const App = {
       e.preventDefault();if(async)this.perform(()=>fn(e));else fn(e);
     });
     document.querySelectorAll('[data-switch-view]').forEach(el=>el.addEventListener('click',()=>{if(!this.busy)this.switchView(el.dataset.switchView);}));
+    document.querySelectorAll('.admin-main-tab-btn').forEach(el=>el.addEventListener('click',()=>{if(!this.busy)this.switchAdminPage(el.dataset.adminPage);}));
     document.querySelectorAll('.admin-tab-btn').forEach(el=>el.addEventListener('click',()=>{if(!this.busy)this.switchAdminTab(el.dataset.adminTab);}));
+    on('btn-admin-detail-back','click',()=>this.switchAdminPage('overview'));
+    on('btn-create-bundle-admin','click',()=>{
+      this.requireAdmin();document.getElementById('input-bundle-name').value='';AppState.tempBundleSessions=[];this.renderTempSessions();document.getElementById('modal-create-bundle').classList.remove('hidden');
+    });
+    on('form-default-sheet-settings','submit',()=>this.saveDefaultSheetSettings());
     on('btn-admin-pw-submit','click',()=>this.handleAdminPasswordSubmit());
     document.getElementById('input-admin-pw').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();this.perform(()=>this.handleAdminPasswordSubmit());}});
     on('btn-admin-pw-cancel','click',()=>document.getElementById('modal-admin-password').classList.add('hidden'),false);

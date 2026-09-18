@@ -76,10 +76,19 @@ test('anonymous legacy read and write routes fail closed',()=>{
   assert.equal(s.ss.getSheets().length,1);
 });
 test('administrator key must be configured, strong and match',()=>{
-  const s=server(),login=s.request({action:'login',adminKey:KEY});assert.equal(login.success,true);assert.ok(Array.isArray(login.bundles));
+  const s=server(),login=s.request({action:'login',adminKey:KEY});assert.equal(login.success,true);assert.equal(login.apiVersion,13);assert.ok(Array.isArray(login.bundles));
   assert.equal(s.request({action:'login',adminKey:'2026'}).success,false);
   s.props.set('ADMIN_KEY','short');
   assert.equal(s.request({action:'login',adminKey:'short'}).success,false);
+});
+test('global attendance defaults and multi-training overview are administrator-only',()=>{
+  const s=prepare(),settings={location:'시청각실',organizer:'연구부',verifierDept:'교무부',verifierName:'부장 홍길동',showApprovalBox:true,approvalStages:['담당','교장']};
+  const saved=s.request({action:'saveAppSettings',settings,adminKey:KEY});assert.equal(saved.success,true);assert.deepEqual(saved.settings,settings);
+  assert.deepEqual(s.request({action:'getAppSettings',adminKey:KEY}).settings,settings);
+  const overview=s.request({action:'adminOverview',adminKey:KEY}).bundles;
+  assert.equal(overview.length,1);assert.equal(overview[0].total,1);assert.equal(overview[0].signed,0);assert.equal(overview[0].sessions[0].title,'연수');
+  assert.equal(s.request({action:'getAppSettings',bundleId:'bundle_test',token:s.token}).success,false);
+  assert.equal(s.request({action:'adminOverview',bundleId:'bundle_test',token:s.token}).success,false);
 });
 test('participant sees only current bundle roster, not signatures or private notes',()=>{
   const s=prepare();
@@ -92,6 +101,12 @@ test('participant sees only current bundle roster, not signatures or private not
     assert.equal(s.request({action,bundleId:'bundle_test',token:s.token,bundle:bundle()}).success,false,action);
   }
   assert.equal(s.request({action:'getBundle',bundleId:'another_bundle',token:s.token}).success,false);
+});
+test('individual session settings are saved but public views expose only title and date',()=>{
+  const s=server(),b=bundle();Object.assign(b.sessions[0],{location:'회의실',organizer:'교무부',verifierDept:'연구부',verifierName:'담당자',showApprovalBox:true,approvalStages:['담당','교장']});
+  const saved=s.request({action:'initBundle',bundle:b,adminKey:KEY});assert.equal(saved.success,true);assert.equal(saved.bundle.sessions[0].location,'회의실');
+  const publicList=JSON.parse(s.context.doGet({parameter:{action:'listPublicBundles'}}).body),publicBundle=JSON.parse(s.context.doGet({parameter:{action:'getPublicBundle',bundleId:'bundle_test'}}).body);
+  for(const item of [publicList.bundles[0].sessions[0],publicBundle.bundle.sessions[0]])assert.deepEqual(Object.keys(item).sort(),['date','id','title']);
 });
 test('public directory exposes only participant-safe data and closes with reception',()=>{
   const s=prepare();
