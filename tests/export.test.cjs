@@ -49,6 +49,14 @@ test('PDF preview uses two 25-row columns, keeps 100 people to two pages, and se
   assert.equal((target.innerHTML.match(/class="attendance-table"/g)||[]).length,8);
   assert.equal((target.innerHTML.match(/class="attendance-row"/g)||[]).length,200);
   assert.equal((target.innerHTML.match(/청렴 연수/g)||[]).length,2);assert.equal((target.innerHTML.match(/안전 연수/g)||[]).length,2);
+  assert.match(target.innerHTML,/2026-09-11/);assert.match(target.innerHTML,/2026-09-12/);
+  const footers=target.innerHTML.match(/<footer class="attendance-footer">.*?<\/footer>/g);
+  assert.equal(footers.length,4);
+  for(const footer of footers){
+    assert.equal((footer.match(/<span>/g)||[]).length,1);
+    assert.match(footer,/확인자:/);
+    assert.doesNotMatch(footer,/\d{4}|출력일/);
+  }
   assert.match(target.innerHTML,/<th class="col-number">연번<\/th><th class="col-dept">부서<\/th><th class="col-name">성명<\/th><th class="col-sign">서명<\/th>/);
   assert.doesNotMatch(target.innerHTML,/>직급</);
   assert.match(target.innerHTML,/<th class="col-note">비고<\/th>/);

@@ -143,6 +143,7 @@ body {
 .attendance-meta,.attendance-footer,.attendance-footer strong,.approval-box,.attendance-reason { font-size:10pt; }
 .attendance-footer { grid-template-columns:1fr auto; gap:1mm 3mm; }
 .attendance-footer > span:first-child { grid-column:1 / -1; }
+.attendance-footer > strong { grid-column:2; text-align:right; }
 
 @media (max-width:850px) {
   #pdf-preview-area { align-items:flex-start; }

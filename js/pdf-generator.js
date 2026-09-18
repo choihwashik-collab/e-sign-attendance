@@ -52,12 +52,11 @@ const PdfGenerator = {
     const start=pageIndex*this.PEOPLE_PER_PAGE,pagePeople=people.slice(start,start+this.PEOPLE_PER_PAGE);
     const left=pagePeople.slice(0,this.ROWS_PER_COLUMN),right=pagePeople.slice(this.ROWS_PER_COLUMN);
     const verifier=[session.verifierDept||session.organizer||'해당 부서',session.verifierName||'담당자'].filter(Boolean).join(' ');
-    const issued=new Date().toLocaleDateString('ko-KR',{year:'numeric',month:'long',day:'numeric'});
     return `<section class="attendance-page" data-session-id="${this.escape(session.id)}" data-page="${pageIndex+1}">
       <header class="attendance-header"><div class="attendance-heading"><h1>${this.escape(session.title)}</h1><p>${this.escape(bundle.name||'연수 그룹')}</p></div>${this.approvalHtml(session)}</header>
       <div class="attendance-meta"><span><strong>일시</strong> ${this.escape(session.date||'-')}</span><span><strong>장소</strong> ${this.escape(session.location||'-')}</span><span><strong>주관</strong> ${this.escape(session.organizer||'-')}</span><span class="page-count">${pageIndex+1} / ${totalPages}</span></div>
       <div class="attendance-columns">${this.columnHtml(left,start+1)}${this.columnHtml(right,start+this.ROWS_PER_COLUMN+1)}</div>
-      <footer class="attendance-footer"><span>위와 같이 연수(교육)에 참석하였음을 확인합니다.</span><span>${issued}</span><strong>확인자: ${this.escape(verifier)} (인)</strong></footer>
+      <footer class="attendance-footer"><span>위와 같이 연수(교육)에 참석하였음을 확인합니다.</span><strong>확인자: ${this.escape(verifier)} (인)</strong></footer>
     </section>`;
   },
   renderPreviewDocument(bundle,attendees,selectedSession) {
