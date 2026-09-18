@@ -50,5 +50,8 @@ test('PDF preview uses two 25-row columns, keeps 100 people to two pages, and se
   assert.equal((target.innerHTML.match(/class="attendance-row"/g)||[]).length,200);
   assert.equal((target.innerHTML.match(/청렴 연수/g)||[]).length,2);assert.equal((target.innerHTML.match(/안전 연수/g)||[]).length,2);
   assert.match(target.innerHTML,/<th class="col-number">연번<\/th><th class="col-dept">부서<\/th><th class="col-name">성명<\/th><th class="col-sign">서명<\/th>/);
-  assert.doesNotMatch(target.innerHTML,/>직급<|>비고</);
+  assert.doesNotMatch(target.innerHTML,/>직급</);
+  assert.match(target.innerHTML,/<th class="col-note">비고<\/th>/);
+  const absence=context.window.PdfGenerator.columnHtml([{name:'홍길동',department:'교무부',status:'출장',note:'교육청 회의',isSigned:false}],1);
+  assert.match(absence,/<td class="col-sign"><\/td><td class="col-note"><div[^>]*>출장: 교육청 회의<\/div>/);
 });

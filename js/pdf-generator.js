@@ -38,16 +38,15 @@ const PdfGenerator = {
   },
   nameHtml(att) {
     if(!att)return '';
-    const status=this.getStatusDisplay(att),reason=status.isSpecial?`<small class="attendance-reason">${this.escape(this.noteText(att))}</small>`:'';
-    return `<span>${this.escape(att.name)}</span>${reason}`;
+    return `<span>${this.escape(att.name)}</span>`;
   },
   columnHtml(rows,startNumber) {
     let body='';
     for(let i=0;i<this.ROWS_PER_COLUMN;i++){
       const att=rows[i],number=att?startNumber+i:'';
-      body+=`<tr class="attendance-row"><td class="col-number">${number}</td><td class="col-dept">${att?this.escape(att.department||'-'):''}</td><td class="col-name">${this.nameHtml(att)}</td><td class="col-sign">${this.signatureHtml(att)}</td></tr>`;
+      body+=`<tr class="attendance-row"><td class="col-number">${number}</td><td class="col-dept">${att?this.escape(att.department||'-'):''}</td><td class="col-name">${this.nameHtml(att)}</td><td class="col-sign">${this.signatureHtml(att)}</td><td class="col-note"><div title="${att?this.escape(this.noteText(att)):''}">${att?this.escape(this.noteText(att)):''}</div></td></tr>`;
     }
-    return `<table class="attendance-table"><thead><tr><th class="col-number">연번</th><th class="col-dept">부서</th><th class="col-name">성명</th><th class="col-sign">서명</th></tr></thead><tbody>${body}</tbody></table>`;
+    return `<table class="attendance-table"><thead><tr><th class="col-number">연번</th><th class="col-dept">부서</th><th class="col-name">성명</th><th class="col-sign">서명</th><th class="col-note">비고</th></tr></thead><tbody>${body}</tbody></table>`;
   },
   pageHtml(bundle,session,people,pageIndex,totalPages) {
     const start=pageIndex*this.PEOPLE_PER_PAGE,pagePeople=people.slice(start,start+this.PEOPLE_PER_PAGE);
