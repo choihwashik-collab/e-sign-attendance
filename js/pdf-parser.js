@@ -69,10 +69,14 @@ const ListParser = {
     }
 
     const data = await file.arrayBuffer();
-    const workbook = window.XLSX.read(data, { type: 'array' });
-    const firstSheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[firstSheetName];
-    const jsonData = window.XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+    let workbook;
+    try {workbook=window.XLSX.read(data,{type:'array'});} catch(error){throw new Error('엑셀 파일을 읽지 못했습니다. 암호를 해제하고 .xlsx 형식으로 다시 저장해 주세요.');}
+    const candidates=workbook.SheetNames.map(name=>({name,rows:window.XLSX.utils.sheet_to_json(workbook.Sheets[name],{header:1,defval:'',raw:false})}));
+    const normalize=value=>String(value??'').replace(/\s+/g,'').trim();
+    const isName=value=>/^(성명|이름|참석자|참석자명|위원명)$/.test(normalize(value));
+    const candidate=candidates.find(s=>s.rows.slice(0,30).some(row=>row.some(isName)))||candidates.find(s=>s.rows.some(row=>row.some(v=>String(v).trim())));
+    if(!candidate)throw new Error('엑셀 파일에 입력된 명단이 없습니다.');
+    const jsonData=candidate.rows;
 
     const attendees = [];
     let currentDept = '일반';
@@ -81,17 +85,20 @@ const ListParser = {
     let deptIdx = -1;
     let nameIdx = -1;
     let posIdx = -1;
+    let orderIdx = -1;
     let startRow = 0;
 
-    for (let r = 0; r < Math.min(jsonData.length, 5); r++) {
+    for (let r = 0; r < Math.min(jsonData.length, 30); r++) {
       const row = jsonData[r];
       if (!Array.isArray(row)) continue;
       
+      if(!row.some(isName))continue;
       row.forEach((cell, idx) => {
-        const str = String(cell || '').trim();
-        if (/부서|소속|과|팀|학급|학년/.test(str)) deptIdx = idx;
-        if (/이름|성명|참석자|성 명/.test(str)) nameIdx = idx;
-        if (/직급|직위|직책|구분/.test(str)) posIdx = idx;
+        const str = normalize(cell);
+        if (/^(부서|소속|소속\(부서\)|부서명|과|팀|학급|학년)$/.test(str)) deptIdx = idx;
+        if (isName(str)) nameIdx = idx;
+        if (/^(직급|직위|직책|구분|직급\/직위)$/.test(str)) posIdx = idx;
+        if (/^(연번|순번|번호|no\.?|순서)$/i.test(str)) orderIdx = idx;
       });
 
       if (nameIdx !== -1) {
@@ -121,11 +128,12 @@ const ListParser = {
       }
 
       if (dept) currentDept = dept;
-      if (name && name !== '성명' && name !== '이름') {
+      if (name && !isName(name)) {
         attendees.push({
           id: 'att_' + Math.random().toString(36).substr(2, 9),
           department: currentDept || '미지정',
-          name: name.replace(/\s+/g, ''),
+          name: name.trim(),
+          importOrder:orderIdx>=0&&/^\d+(?:\.0+)?$/.test(String(row[orderIdx]).trim())?Number(row[orderIdx]):null,
           position: pos || '',
           isSigned: false,
           signatureData: null,
@@ -134,7 +142,9 @@ const ListParser = {
       }
     }
 
-    return attendees;
+    // Explicit sequence wins; missing sequence entries keep their relative file order at the end.
+    if(orderIdx>=0)attendees.sort((a,b)=>(a.importOrder??Infinity)-(b.importOrder??Infinity));
+    return attendees.map(({importOrder,...person})=>person);
   },
 
   /**

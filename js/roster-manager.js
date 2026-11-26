@@ -29,7 +29,7 @@ const RosterManager = {
     App.requireAdmin();
     if(!this.confirmDiscard())return;
     if(target==='bundle'&&!AppState.currentBundle)throw new Error('연수를 먼저 선택하세요.');
-    await this.refresh();this.target=target;
+    if(target!=='bundle')await this.refresh();this.target=target;
     this.draft=target==='bundle'?JSON.parse(JSON.stringify(AppState.currentBundle)):
       {id:'roster_'+GasSync.randomHex(16),name:'기본명단'+(this.rosters.length+1),attendees:[]};
     this.dirty=false;App.rosterDirty=true;this.render();
@@ -44,6 +44,7 @@ const RosterManager = {
     const body=document.getElementById('roster-editor-body');body.replaceChildren();
     this.draft.attendees.forEach((person,index)=>{
       const row=document.createElement('tr');
+      const number=document.createElement('td');number.textContent=index+1;row.appendChild(number);
       for(const field of ['department','name','position']){
         const cell=document.createElement('td'),input=document.createElement('input');
         input.value=person[field]||'';input.maxLength=100;input.setAttribute('aria-label',(index+1)+'행 '+({department:'소속',name:'성명',position:'직급'}[field]));
@@ -54,7 +55,13 @@ const RosterManager = {
         if(App.busy)return;
         if(this.target==='bundle'&&person.signedAt&&!confirm('이 사람의 서명·사유도 삭제됩니다. 계속할까요?'))return;
         this.draft.attendees.splice(index,1);this.markDirty();this.render();
-      });cell.appendChild(remove);row.appendChild(cell);body.appendChild(row);
+      });
+      for(const [label,delta] of [['↑',-1],['↓',1]]){
+        const move=document.createElement('button');move.type='button';move.textContent=label;move.setAttribute('aria-label',(index+1)+'행 '+(delta<0?'위로':'아래로'));
+        move.disabled=index+delta<0||index+delta>=this.draft.attendees.length;
+        move.addEventListener('click',()=>{if(App.busy)return;const people=this.draft.attendees;[people[index],people[index+delta]]=[people[index+delta],people[index]];this.markDirty();this.render();});cell.appendChild(move);
+      }
+      cell.appendChild(remove);row.appendChild(cell);body.appendChild(row);
     });
     document.getElementById('roster-editor-count').textContent=this.draft.attendees.length+'명';
   },

@@ -38,6 +38,31 @@ test('downloadable basic roster template has the requested columns and numbered 
   const uploadBuffer=await new Blob([Buffer.from(bytes)]).arrayBuffer();
   const parsed=await context.window.ListParser.parseExcel({arrayBuffer:async()=>uploadBuffer});
   assert.equal(parsed.length,1);assert.deepEqual([parsed[0].department,parsed[0].position,parsed[0].name],['교무부','교사','가상인물']);
+  const multi=context.XLSX.utils.book_new();
+  context.XLSX.utils.book_append_sheet(multi,context.XLSX.utils.aoa_to_sheet([['안내문']]),'안내');
+  context.XLSX.utils.book_append_sheet(multi,context.XLSX.utils.aoa_to_sheet([
+    ['위원회 명단'],[],[],[],[],[],['순 번','소 속','직 책','성 명'],
+    [2,'위원회','위원','가위원'],[1,'위원회','위원장','하위원장'],[3,'위원회','위원','나위원']
+  ]),'명단');
+  const multiBytes=context.XLSX.write(multi,{type:'array',bookType:'xlsx'});
+  const multiPeople=await context.window.ListParser.parseExcel({arrayBuffer:async()=>new Blob([Buffer.from(multiBytes)]).arrayBuffer()});
+  assert.deepEqual(Array.from(multiPeople,p=>p.name),['하위원장','가위원','나위원']);
+  assert.equal(multiPeople[0].position,'위원장');
+});
+test('adaptive PDF contains no blank rows, preserves order and labels meetings',()=>{
+  const target={innerHTML:''},context=vm.createContext({console,Date,window:{},document:{getElementById:()=>target}});
+  vm.runInContext(fs.readFileSync('js/pdf-generator.js','utf8'),context);
+  const generator=context.window.PdfGenerator;
+  for(const count of [0,1,7,25,26,49,50,51,75,100,101,200]){
+    const people=Array.from({length:count},(_,i)=>({id:'a'+i,name:i===0?'하위원장':'가위원'+i,department:'위원회'}));
+    generator.renderPreviewDocument({sessions:[{id:'meeting',title:'운영위원회',eventType:'회의',date:'2026-11-26'}]},people);
+    assert.equal((target.innerHTML.match(/class="attendance-row"/g)||[]).length,count);
+    assert.equal((target.innerHTML.match(/class="attendance-page"/g)||[]).length,Math.max(1,Math.ceil(count/50)));
+    assert.match(target.innerHTML,/위와 같이 회의에 참석/);
+    if(count>1)assert.ok(target.innerHTML.indexOf('하위원장')<target.innerHTML.indexOf('가위원1'));
+    if(count<=25)assert.match(target.innerHTML,/single-column/);
+    assert.doesNotMatch(target.innerHTML,/<td class="col-number"><\/td>/);
+  }
 });
 test('PDF preview uses two 25-row columns, keeps 100 people to two pages, and separates sessions',()=>{
   const target={innerHTML:''},context=vm.createContext({console,Date,window:{},document:{getElementById:id=>id==='pdf-preview-area'?target:null}});

@@ -39,6 +39,8 @@ const App = {
   message(text,error=false) {
     const el=document.getElementById('app-message');
     if(el){el.textContent=text;el.className=error?'app-message error':'app-message';el.hidden=!text;}
+    const rosterMessage=document.getElementById('roster-editor-message');
+    if(rosterMessage){rosterMessage.textContent=text;rosterMessage.style.color=error?'#b91c1c':'';}
   },
   async perform(work) {
     if(this.busy){this.message('앞선 작업을 처리 중입니다. 잠시 기다려 주세요.');return;}
@@ -194,9 +196,9 @@ const App = {
     if(this.share?.bundleId===id)this.share=null;
     this.switchView('home');this.message('묶음을 삭제했습니다. 앱 내 복구 기능은 없으며 백업이 필요합니다.');
   },
-  async addSessionToBundle(id,title,date) {
+  async addSessionToBundle(id,title,date,eventType='연수') {
     const sid='sess_'+GasSync.randomHex(16);AppState.selectedSettingsSessionId=sid;
-    await this.editBundle(b=>b.sessions.push({id:sid,title,date,...this.defaultSessionFields()}));
+    await this.editBundle(b=>b.sessions.push({id:sid,title,date,eventType,...this.defaultSessionFields()}));
     this.updateHeaderInfo();
   },
   async removeSessionFromBundle(id,sid) {
@@ -381,7 +383,7 @@ const App = {
       AppState.currentBundle.sessions.forEach(sess => {
         const li = document.createElement('li');
         li.className = 'text-sm text-gray-600';
-        li.textContent = `• ${sess.title} (${sess.date})`;
+        li.textContent = `• [${sess.eventType==='회의'?'회의':'연수'}] ${sess.title} (${sess.date})`;
         sessionListEl.appendChild(li);
       });
     }
@@ -605,6 +607,7 @@ const App = {
 
     if(bundleName)bundleName.value=bundle.name||'';
     if(sessionTitle)sessionTitle.value=session.title||'';if(sessionDate)sessionDate.value=session.date||'';
+    document.getElementById('input-session-type-settings').value=session.eventType==='회의'?'회의':'연수';
     if(loc) loc.value = session.location ?? bundle.location ?? '';
     if(org) org.value = session.organizer ?? bundle.organizer ?? '';
     if(vDept) vDept.value = session.verifierDept ?? bundle.verifierDept ?? '';
@@ -651,7 +654,7 @@ const App = {
       li.className = 'flex justify-between items-center gap-2 p-2 border-b '+(selected?'bg-brand-100':'');
       li.innerHTML = `
         <button type="button" class="btn-select-session flex-grow text-left px-2 py-2 rounded ${selected?'font-bold text-brand-800':'hover:bg-white'}" data-id="${escapeHtml(sess.id)}">
-          ${escapeHtml(sess.title)} <span class="text-sm text-gray-500">(${escapeHtml(sess.date)})</span>
+          [${sess.eventType==='회의'?'회의':'연수'}] ${escapeHtml(sess.title)} <span class="text-sm text-gray-500">(${escapeHtml(sess.date)})</span>
         </button>
         <button type="button" class="btn-del-session text-red-500 hover:text-red-700 text-sm" data-id="${escapeHtml(sess.id)}">삭제</button>
       `;
@@ -781,8 +784,14 @@ const App = {
       status:'미서명',isSigned:false,signatureData:null,signedAt:null,note:''}));
     const replace=document.querySelector('input[name="roster-mode"]:checked')?.value==='replace';
     if(replace&&!confirm('명단 교체는 기존 참석자와 서명을 삭제합니다. 백업 후 진행할까요?'))return;
-    await this.editBundle(b=>{b.attendees=replace?mapped:b.attendees.concat(mapped);});
-    document.getElementById('file-upload-status').textContent=mapped.length+'명을 저장했습니다. 이름·부서가 정확한지 검토하세요.';
+    if(!RosterManager.confirmDiscard())return;
+    const next=replace?mapped:AppState.currentBundle.attendees.concat(mapped);
+    if(next.length>200)throw new Error('명단은 최대 200명입니다.');
+    RosterManager.target='bundle';RosterManager.draft=JSON.parse(JSON.stringify(AppState.currentBundle));
+    RosterManager.draft.attendees=next;RosterManager.markDirty();RosterManager.render();
+    document.getElementById('modal-roster-manager').classList.remove('hidden');
+    document.getElementById('file-upload-status').textContent=mapped.length+'명을 편집기에 불러왔습니다. 아직 저장 전입니다.';
+    this.message('명단을 바로 수정하거나 ↑↓로 순서를 바꿀 수 있습니다. 확인 후 [명단 저장]을 누르세요.');
   },
   async issueQr() {
     this.requireAdmin();
@@ -808,6 +817,7 @@ const App = {
       const session=b.sessions.find(s=>s.id===AppState.selectedSettingsSessionId);if(!session)throw new Error('수정할 연수를 선택하세요.');
       b.name=document.getElementById('input-bundle-name-settings').value.trim();
       session.title=document.getElementById('input-session-title-settings').value.trim();session.date=document.getElementById('input-session-date-settings').value;
+      session.eventType=document.getElementById('input-session-type-settings').value;
       session.location=document.getElementById('input-session-location').value.trim();session.organizer=document.getElementById('input-session-organizer').value.trim();
       session.verifierDept=document.getElementById('input-verifier-dept').value.trim();session.verifierName=document.getElementById('input-verifier-name').value.trim();
       session.showApprovalBox=document.getElementById('check-show-approval').checked;
@@ -857,7 +867,7 @@ const App = {
     const list=document.getElementById('bundle-session-list-preview');list.replaceChildren();
     AppState.tempBundleSessions.forEach((s,i)=>{
       const row=document.createElement('div'),button=document.createElement('button');
-      row.textContent=s.title+' ('+s.date+') ';button.textContent='삭제';button.type='button';
+      row.textContent='['+(s.eventType==='회의'?'회의':'연수')+'] '+s.title+' ('+s.date+') ';button.textContent='삭제';button.type='button';
       button.addEventListener('click',()=>{AppState.tempBundleSessions.splice(i,1);this.renderTempSessions();});row.appendChild(button);list.appendChild(row);
     });
   },
@@ -894,7 +904,7 @@ const App = {
     on('btn-bundle-add-session','click',()=>{
       const title=document.getElementById('input-bundle-session-title').value.trim(),date=document.getElementById('input-bundle-session-date').value;
       if(!title||!date)throw new Error('연수 제목과 날짜를 입력하세요.');
-      AppState.tempBundleSessions.push({id:'sess_'+GasSync.randomHex(16),title,date});this.renderTempSessions();
+      AppState.tempBundleSessions.push({id:'sess_'+GasSync.randomHex(16),title,date,eventType:document.getElementById('input-bundle-session-type').value});this.renderTempSessions();
       document.getElementById('input-bundle-session-title').value='';
     });
     on('btn-bundle-create-submit','click',async()=>{
@@ -905,7 +915,7 @@ const App = {
     on('btn-add-session-to-bundle','click',async()=>{
       const title=document.getElementById('input-new-session-title').value.trim(),date=document.getElementById('input-new-session-date').value;
       if(!title||!date)throw new Error('제목과 날짜를 입력하세요.');
-      await this.addSessionToBundle(AppState.currentBundle?.id,title,date);document.getElementById('input-new-session-title').value='';
+      await this.addSessionToBundle(AppState.currentBundle?.id,title,date,document.getElementById('input-new-session-type').value);document.getElementById('input-new-session-title').value='';
     });
     document.getElementById('form-session-info').addEventListener('input',()=>{
       this.settingsDirty=true;

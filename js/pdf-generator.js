@@ -16,14 +16,14 @@ const PdfGenerator = {
   },
   effectiveSession(bundle,session) {
     const s=session||{};
-    return {id:s.id||'',title:s.title||bundle.title||bundle.name||'연수 및 교육 참석자 서명부',date:s.date||bundle.date||'',
+    return {id:s.id||'',eventType:s.eventType==='회의'?'회의':'연수',title:s.title||bundle.title||bundle.name||'참석자 서명부',date:s.date||bundle.date||'',
       location:s.location ?? bundle.location ?? '',organizer:s.organizer ?? bundle.organizer ?? '',
       verifierDept:s.verifierDept ?? bundle.verifierDept ?? '',verifierName:s.verifierName ?? bundle.verifierName ?? '',
       showApprovalBox:s.showApprovalBox ?? bundle.showApprovalBox ?? false,
       approvalStages:Array.isArray(s.approvalStages)?s.approvalStages:(Array.isArray(bundle.approvalStages)?bundle.approvalStages:[])};
   },
   sorted(attendees) {
-    return [...(attendees||[])].sort((a,b)=>a.department===b.department?a.name.localeCompare(b.name,'ko'):a.department.localeCompare(b.department,'ko'));
+    return [...(attendees||[])];
   },
   approvalHtml(session) {
     if(!session.showApprovalBox||!session.approvalStages.length)return '';
@@ -42,21 +42,23 @@ const PdfGenerator = {
   },
   columnHtml(rows,startNumber) {
     let body='';
-    for(let i=0;i<this.ROWS_PER_COLUMN;i++){
+    for(let i=0;i<rows.length;i++){
       const att=rows[i],number=att?startNumber+i:'';
       body+=`<tr class="attendance-row"><td class="col-number">${number}</td><td class="col-dept">${att?this.escape(att.department||'-'):''}</td><td class="col-name">${this.nameHtml(att)}</td><td class="col-sign">${this.signatureHtml(att)}</td><td class="col-note"><div title="${att?this.escape(this.noteText(att)):''}">${att?this.escape(this.noteText(att)):''}</div></td></tr>`;
     }
     return `<table class="attendance-table"><thead><tr><th class="col-number">연번</th><th class="col-dept">부서</th><th class="col-name">성명</th><th class="col-sign">서명</th><th class="col-note">비고</th></tr></thead><tbody>${body}</tbody></table>`;
   },
   pageHtml(bundle,session,people,pageIndex,totalPages) {
-    const start=pageIndex*this.PEOPLE_PER_PAGE,pagePeople=people.slice(start,start+this.PEOPLE_PER_PAGE);
-    const left=pagePeople.slice(0,this.ROWS_PER_COLUMN),right=pagePeople.slice(this.ROWS_PER_COLUMN);
+    const pageSize=Math.ceil(people.length/totalPages),start=pageIndex*pageSize,pagePeople=people.slice(start,start+pageSize);
+    const single=pagePeople.length<=25,split=single?pagePeople.length:Math.ceil(pagePeople.length/2);
+    const left=pagePeople.slice(0,split),right=pagePeople.slice(split);
+    const rowHeight=Math.min(12,200/Math.max(1,split));
     const verifier=[session.verifierDept||session.organizer||'해당 부서',session.verifierName||'담당자'].filter(Boolean).join(' ');
     return `<section class="attendance-page" data-session-id="${this.escape(session.id)}" data-page="${pageIndex+1}">
       <header class="attendance-header"><div class="attendance-heading"><h1>${this.escape(session.title)}</h1><p>${this.escape(bundle.name||'연수 그룹')}</p></div>${this.approvalHtml(session)}</header>
       <div class="attendance-meta"><span><strong>일시</strong> ${this.escape(session.date||'-')}</span><span><strong>장소</strong> ${this.escape(session.location||'-')}</span><span><strong>주관</strong> ${this.escape(session.organizer||'-')}</span><span class="page-count">${pageIndex+1} / ${totalPages}</span></div>
-      <div class="attendance-columns">${this.columnHtml(left,start+1)}${this.columnHtml(right,start+this.ROWS_PER_COLUMN+1)}</div>
-      <footer class="attendance-footer"><span>위와 같이 연수(교육)에 참석하였음을 확인합니다.</span><strong>확인자: ${this.escape(verifier)} (인)</strong></footer>
+      <div class="attendance-columns${single?' single-column':''}" style="--attendance-row-height:${rowHeight}mm">${pagePeople.length?this.columnHtml(left,start+1):'<p class="empty-attendance">등록된 참석자가 없습니다.</p>'}${right.length?this.columnHtml(right,start+split+1):''}</div>
+      <footer class="attendance-footer"><span>위와 같이 ${this.escape(session.eventType||'연수')}에 참석하였음을 확인합니다.</span><strong>확인자: ${this.escape(verifier)} (인)</strong></footer>
     </section>`;
   },
   renderPreviewDocument(bundle,attendees,selectedSession) {

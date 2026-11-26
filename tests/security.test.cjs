@@ -76,7 +76,7 @@ test('anonymous legacy read and write routes fail closed',()=>{
   assert.equal(s.ss.getSheets().length,1);
 });
 test('administrator key must be configured, strong and match',()=>{
-  const s=server(),login=s.request({action:'login',adminKey:KEY});assert.equal(login.success,true);assert.equal(login.apiVersion,14);assert.ok(Array.isArray(login.bundles));
+  const s=server(),login=s.request({action:'login',adminKey:KEY});assert.equal(login.success,true);assert.equal(login.apiVersion,15);assert.ok(Array.isArray(login.bundles));
   assert.equal(s.request({action:'login',adminKey:'2026'}).success,false);
   s.props.set('ADMIN_KEY','short');
   assert.equal(s.request({action:'login',adminKey:'short'}).success,false);
@@ -102,11 +102,35 @@ test('participant sees only current bundle roster, not signatures or private not
   }
   assert.equal(s.request({action:'getBundle',bundleId:'another_bundle',token:s.token}).success,false);
 });
-test('individual session settings are saved but public views expose only title and date',()=>{
+test('individual session settings are saved but public views expose only title, type and date',()=>{
   const s=server(),b=bundle();Object.assign(b.sessions[0],{location:'회의실',organizer:'교무부',verifierDept:'연구부',verifierName:'담당자',showApprovalBox:true,approvalStages:['담당','교장']});
   const saved=s.request({action:'initBundle',bundle:b,adminKey:KEY});assert.equal(saved.success,true);assert.equal(saved.bundle.sessions[0].location,'회의실');
   const publicList=JSON.parse(s.context.doGet({parameter:{action:'listPublicBundles'}}).body),publicBundle=JSON.parse(s.context.doGet({parameter:{action:'getPublicBundle',bundleId:'bundle_test'}}).body);
-  for(const item of [publicList.bundles[0].sessions[0],publicBundle.bundle.sessions[0]])assert.deepEqual(Object.keys(item).sort(),['date','id','title']);
+  for(const item of [publicList.bundles[0].sessions[0],publicBundle.bundle.sessions[0]])assert.deepEqual(Object.keys(item).sort(),['date','eventType','id','title']);
+});
+test('meeting type and manually arranged roster survive a server round trip',()=>{
+  const s=server(),b=bundle();b.sessions[0].eventType='회의';
+  b.attendees=[{id:'chair',name:'하위원장',department:'위원회'},{id:'member',name:'가위원',department:'위원회'}];
+  const saved=s.request({action:'initBundle',bundle:b,adminKey:KEY});assert.equal(saved.success,true);
+  const actual=s.request({action:'getBundle',bundleId:b.id,adminKey:KEY}).bundle;
+  assert.equal(actual.sessions[0].eventType,'회의');assert.deepEqual(actual.attendees.map(p=>p.name),['하위원장','가위원']);
+  b.sessions[0].eventType='invalid';assert.equal(s.request({action:'initBundle',bundle:b,expectedRevision:saved.bundle.revision,adminKey:KEY}).success,false);
+});
+test('meeting saves are blocked before writing to an old server',async()=>{
+  const c=client(),b=bundle();b.sessions[0].eventType='회의';c.gas.apiVersion=14;
+  c.gas._post=()=>{throw Error('must not write');};
+  await assert.rejects(()=>c.gas.syncBundle(b),/15버전/);
+});
+test('uploaded roster opens an editable draft without writing or changing current attendance',async()=>{
+  const c=client();vm.runInContext(source('js/roster-manager.js'),c.context);
+  c.run(`AppState.isAdminAuthenticated=true;AppState.currentBundle={id:'bundle_test',name:'회의',attendees:[{id:'chair',name:'위원장',signatureData:'keep',signedAt:'now'}]}`);
+  c.gas.syncBundle=()=>{throw Error('Unexpected server write');};
+  await c.app.appendOrReplaceAttendees([{name:'신규위원',department:'위원회'}]);
+  assert.equal(c.run('RosterManager.dirty'),true);
+  assert.equal(c.run('RosterManager.draft.attendees.length'),2);
+  assert.equal(c.run('AppState.currentBundle.attendees.length'),1);
+  assert.equal(c.run('RosterManager.draft.attendees[0].signatureData'),'keep');
+  assert.equal(c.elements.get('roster-editor-body').children.length,2);
 });
 test('public directory exposes only participant-safe data and closes with reception',()=>{
   const s=prepare();
@@ -201,7 +225,7 @@ test('same receipt request ID does not repeat mutations',()=>{
 function client() {
   const elements=new Map(),storage=new Map(),intervals=[];
   const element=()=>({textContent:'',innerHTML:'',value:'',style:{},children:[],classList:{add(){},remove(){},toggle(){}},
-    appendChild(child){this.children.push(child);},replaceChildren(){this.children=[];},addEventListener(){},querySelectorAll(){return[];},remove(){}});
+    appendChild(child){this.children.push(child);},replaceChildren(){this.children=[];},addEventListener(){},setAttribute(){},querySelectorAll(){return[];},remove(){}});
   for(const m of source('index.html').matchAll(/id="([^"]+)"/g))elements.set(m[1],element());
   const context={console,URL,URLSearchParams,crypto:crypto.webcrypto,Uint8Array,AbortController,JSON,Date,
     window:{addEventListener(){}},document:{hidden:false,addEventListener(){},getElementById:id=>elements.get(id)||null,

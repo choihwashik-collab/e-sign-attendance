@@ -5,7 +5,7 @@
     <meta name="referrer" content="no-referrer">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://cdn.sheetjs.com https://script.google.com https://script.googleusercontent.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; font-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net data:; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://cdn.jsdelivr.net; worker-src 'self' blob: https://cdn.jsdelivr.net; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-    <title>연수 참석자 전자 서명 시스템</title>
+    <title>연수·회의 참석자 전자 서명 시스템</title>
     
     <link rel="stylesheet" href="css/tailwind.css?v=15">
     
@@ -17,7 +17,7 @@
     <script src="https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js" integrity="sha384-qovJwSBbRDPP5cEjCp8S0UP66wrvnjaa60XMOGzTNanrThcrGfXfnZkvgY8N1KT3" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js" integrity="sha384-Pqp51FUN2/qzfxZxBCtF0stpc9ONI6MYZpVqmo8m20SoaQCzf+arZvACkLkirlPz" crossorigin="anonymous"></script>
     
-    <link rel="stylesheet" href="css/style.css?v=18">
+    <link rel="stylesheet" href="css/style.css?v=19">
 </head>
 <body class="min-h-screen bg-slate-50 flex flex-col text-gray-800 font-sans">
     <div id="busy-indicator" hidden role="status" aria-live="polite"><span class="busy-spinner"></span><span>처리 중입니다. 한 번만 누르고 잠시 기다려 주세요.</span></div>
@@ -34,7 +34,7 @@
                 </div>
                 <nav class="flex space-x-1 sm:space-x-4 text-sm">
                     <button id="nav-btn-home" data-switch-view="home" class="px-3 py-2 rounded-lg text-blue-100 hover:bg-white/10 hover:text-white transition-colors">
-                        <i class="fas fa-list-ul mr-1"></i><span class="hidden sm:inline">📋 연수 목록</span>
+                        <i class="fas fa-list-ul mr-1"></i><span class="hidden sm:inline">📋 연수·회의 목록</span>
                     </button>
                     <button id="nav-btn-participant" data-switch-view="participant" class="px-3 py-2 rounded-lg text-blue-100 hover:bg-white/10 hover:text-white transition-colors">
                         <i class="fas fa-mobile-alt mr-1"></i><span class="hidden sm:inline">📱 서명</span>
@@ -60,8 +60,8 @@
             </div>
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div>
-                    <h1 class="text-2xl font-bold text-gray-900">연수 묶음 관리</h1>
-                    <p class="text-gray-500 text-sm mt-1">여러 연수를 하나의 묶음으로 관리하고 서명을 진행하세요.</p>
+                    <h1 class="text-2xl font-bold text-gray-900">연수·회의 묶음 관리</h1>
+                    <p class="text-gray-500 text-sm mt-1">연수 또는 회의를 선택해 개설하고 참석자 서명을 받으세요.</p>
                 </div>
                 <button id="btn-create-bundle" class="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-xl shadow-md transition-colors font-medium whitespace-nowrap">
                     ➕ 새 연수 묶음 만들기
@@ -81,7 +81,7 @@
                 <div class="bg-brand-50 border border-brand-100 rounded-xl p-4">
                     <h2 id="participant-bundle-info" class="text-lg font-bold text-brand-900 mb-2"></h2>
                     <div id="participant-session-list" class="text-sm text-brand-700">
-                        이 서명은 다음 연수에 모두 적용됩니다:
+                        이 서명은 다음 연수·회의에 모두 적용됩니다:
                     </div>
                 </div>
 
@@ -329,7 +329,7 @@
                             </button>
                         </div>
 
-                        <p class="text-sm text-gray-600">연수별로 제목과 설정이 다른 서명부가 생성됩니다. 한 페이지는 25행씩 2열(최대 50명)이며 100명은 2페이지로 출력됩니다.</p>
+                        <p class="text-sm text-gray-600">연수·회의별로 별도 서명부를 생성합니다. 입력 순서대로, 빈 행 없이 인원에 맞춰 1단 또는 2단으로 배치합니다. 한 페이지 최대 50명, 100명은 2페이지입니다.</p>
                         <div class="pdf-paper-shell bg-gray-100 p-4 rounded-xl overflow-x-auto border border-gray-300 min-h-[600px]">
                             <div id="pdf-preview-area">
                                 <!-- Print layout rendered by JS -->
@@ -382,7 +382,8 @@
                                                 <!-- JS renders sessions here with delete buttons -->
                                             </ul>
                                             <div class="p-3 bg-white border-t border-gray-200 flex flex-col sm:flex-row gap-2">
-                                                <input type="text" id="input-new-session-title" placeholder="새 연수 제목" class="flex-grow border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none">
+                                                <select id="input-new-session-type" aria-label="행사 구분" class="border rounded-lg px-3 py-2"><option>연수</option><option>회의</option></select>
+                                                <input type="text" id="input-new-session-title" placeholder="새 연수·회의 제목" class="flex-grow border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none">
                                                 <input type="date" id="input-new-session-date" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 outline-none w-full sm:w-auto">
                                                 <button id="btn-add-session-to-bundle" type="button" class="bg-brand-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-700 whitespace-nowrap">
                                                     연수 추가
@@ -392,10 +393,11 @@
                                     </div>
 
                                     <div class="bg-brand-50 border border-brand-200 rounded-xl p-4">
-                                        <h4 class="font-bold text-brand-900 mb-3">선택한 연수 설정</h4>
+                                        <h4 class="font-bold text-brand-900 mb-3">선택한 연수·회의 설정</h4>
                                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <div><label for="input-session-title-settings" class="block text-sm font-medium mb-1">연수명</label><input id="input-session-title-settings" maxlength="200" class="w-full border rounded-xl px-4 py-2"></div>
-                                            <div><label for="input-session-date-settings" class="block text-sm font-medium mb-1">연수 일자</label><input id="input-session-date-settings" type="date" class="w-full border rounded-xl px-4 py-2"></div>
+                                            <div><label for="input-session-type-settings" class="block text-sm font-medium mb-1">행사 구분</label><select id="input-session-type-settings" class="w-full border rounded-xl px-4 py-2"><option>연수</option><option>회의</option></select></div>
+                                            <div><label for="input-session-title-settings" class="block text-sm font-medium mb-1">연수·회의명</label><input id="input-session-title-settings" maxlength="200" class="w-full border rounded-xl px-4 py-2"></div>
+                                            <div><label for="input-session-date-settings" class="block text-sm font-medium mb-1">개최 일자</label><input id="input-session-date-settings" type="date" class="w-full border rounded-xl px-4 py-2"></div>
                                         </div>
                                     </div>
                                     
@@ -569,7 +571,8 @@
                     <label class="block text-sm font-bold text-brand-900 mb-2">이 묶음에 포함될 연수들</label>
                     
                     <div class="flex flex-col sm:flex-row gap-2 mb-3">
-                        <input id="input-bundle-session-title" type="text" placeholder="연수 제목" class="flex-grow border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none">
+                        <select id="input-bundle-session-type" aria-label="행사 구분" class="border rounded-lg px-3 py-2"><option>연수</option><option>회의</option></select>
+                        <input id="input-bundle-session-title" type="text" placeholder="연수·회의 제목" class="flex-grow border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none">
                         <input id="input-bundle-session-date" type="date" class="border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none w-full sm:w-auto">
                         <button id="btn-bundle-add-session" type="button" class="bg-brand-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-brand-700 whitespace-nowrap">
                             추가
@@ -703,10 +706,11 @@
                 </div>
                 <input id="basic-roster-file-input" type="file" accept=".xlsx,.xls,.csv" class="hidden">
             </div>
+            <p id="roster-editor-message" role="status" aria-live="polite" class="text-sm mb-3">파일을 불러오면 아래에서 확인·수정한 후 저장하세요. ↑↓ 버튼으로 순서를 바꿀 수 있습니다.</p>
             <label for="roster-editor-name" class="text-sm font-medium">명단 이름</label>
             <input id="roster-editor-name" maxlength="100" class="w-full border rounded px-3 py-2 mb-3" placeholder="예: 기본명단1">
             <div class="roster-table-scroll">
-                <table class="roster-editor"><thead><tr><th>소속</th><th>성명</th><th>직급</th><th>관리</th></tr></thead><tbody id="roster-editor-body"></tbody></table>
+                <table class="roster-editor"><thead><tr><th>순번</th><th>소속</th><th>성명</th><th>직급</th><th>순서 / 삭제</th></tr></thead><tbody id="roster-editor-body"></tbody></table>
             </div>
             <div class="flex flex-wrap items-center gap-2 mt-3">
                 <span id="roster-editor-count" class="text-sm text-gray-500">0명</span>
@@ -715,12 +719,12 @@
             </div>
         </div>
     </div>
-    <script src="js/roster-manager.js?v=17"></script>
-    <script src="js/pdf-parser.js?v=15"></script>
+    <script src="js/roster-manager.js?v=19"></script>
+    <script src="js/pdf-parser.js?v=19"></script>
     <script src="js/signature-pad.js?v=15"></script>
-    <script src="js/gas-sync.js?v=17"></script>
-    <script src="js/pdf-generator.js?v=18"></script>
-    <script src="js/app.js?v=17"></script>
+    <script src="js/gas-sync.js?v=19"></script>
+    <script src="js/pdf-generator.js?v=19"></script>
+    <script src="js/app.js?v=19"></script>
 
 </body>
 </html>

@@ -26,13 +26,14 @@ const GasSync = {
   async testConnection(url = this.getScriptUrl()) {
     if (!this.isValidUrl(url)) return {success:false,message:'연동 주소가 없습니다.'};
     const result = await this._jsonpRequest(url,{action:'ping'});
-    const success = result?.success && [13,14].includes(result.apiVersion);
+    const success = result?.success && [13,14,15].includes(result.apiVersion);
     return {success:!!success,message:success?'서버 연결 확인':'서버 업데이트 또는 연결 확인이 필요합니다.'};
   },
   async login(key) {
     if (typeof key !== 'string' || key.length < 32) throw new Error('스크립트 속성의 관리자 키(32자 이상)를 입력하세요.');
     const result = await this._post({action:'login'},key);
-    if (![13,14].includes(result.apiVersion)) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
+    if (![13,14,15].includes(result.apiVersion)) throw new Error('Google Apps Script에 새 Code.gs를 적용하고 새 버전으로 배포해 주세요.');
+    this.apiVersion=result.apiVersion;
     this.adminKey = key;
     this.participant = null;
     return result;
@@ -56,6 +57,7 @@ const GasSync = {
     return (await this._post({action:'getBundle',bundleId})).bundle;
   },
   async syncBundle(bundle,metadataOnly=false) {
+    if(bundle.sessions?.some(s=>s.eventType==='회의')&&!(this.apiVersion>=15))throw new Error('회의 구분 저장에는 새 Code.gs(15버전)가 필요합니다. Apps Script에서 코드를 교체하고 새 버전으로 배포한 뒤 다시 로그인하세요.');
     // Existing attendance is authoritative on the server. Do not re-upload PNGs on edits.
     const wire=Number.isInteger(bundle.revision)?{...bundle,attendees:bundle.attendees.map(a=>({...a,signatureData:null,isSigned:false}))}:bundle;
     return this._post({action:'initBundle',bundle:wire,metadataOnly,expectedRevision:bundle.revision});

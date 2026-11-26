@@ -2,7 +2,7 @@
 var REGISTRY_SHEET = '_eSignBundles';
 var ATTENDANCE_HEADERS = ['참석자ID', '소속(부서)', '직급', '성명', '출석/서명상태', '비고', '서명데이터', '서명시각'];
 var REGISTRY_HEADERS = ['묶음ID', '묶음명', '생성일', '연수목록JSON', '장소', '주관', '확인부서', '확인자', '결재란표시', '결재단계JSON', '출석시트ID'];
-var API_VERSION = 14;
+var API_VERSION = 15;
 
 function doGet(e) {
   try {return getResponse_(e);} catch(error) {return jsonResponse({success:false,message:'연수 정보를 읽지 못했습니다. 잠시 후 다시 시도해 주세요.'},e&&e.parameter&&e.parameter.callback);}
@@ -105,7 +105,7 @@ function bundleView_(bundle, admin) {
         status:a.isSigned ? '서명완료' : (a.signedAt ? '처리완료' : '미서명'), signedAt:a.signedAt || null};
     })};
 }
-function publicSession_(s){return {id:s.id,title:s.title,date:s.date};}
+function publicSession_(s){return {id:s.id,title:s.title,date:s.date,eventType:s.eventType==='회의'?'회의':'연수'};}
 function publicBundleSummary_(b){return {id:b.id,name:b.name,sessions:(b.sessions||[]).map(publicSession_),createdAt:b.createdAt,revision:b.revision,attendees:[],summary:true};}
 
 function dispatch_(p, admin) {
@@ -306,7 +306,8 @@ function validateBundle_(b, prior) {
   var clean={id:b.id,name:text_(b.name,200,true),createdAt:new Date().toISOString(),attendees:attendees,
     sessions:b.sessions.map(function(s){
       var id=text_(s.id,100,true);if(sessionIds[id])throw new Error('연수 ID가 중복됩니다.');sessionIds[id]=true;
-      return {id:id,title:text_(s.title,200,true),date:text_(s.date,30,true),
+      if(s.eventType!==undefined&&s.eventType!=='연수'&&s.eventType!=='회의')throw new Error('행사 구분은 연수 또는 회의를 선택하세요.');
+      return {id:id,title:text_(s.title,200,true),date:text_(s.date,30,true),eventType:s.eventType==='회의'?'회의':'연수',
         location:text_(s.location===undefined?b.location:s.location,200,false),organizer:text_(s.organizer===undefined?b.organizer:s.organizer,200,false),
         verifierDept:text_(s.verifierDept===undefined?b.verifierDept:s.verifierDept,100,false),verifierName:text_(s.verifierName===undefined?b.verifierName:s.verifierName,100,false),
         showApprovalBox:s.showApprovalBox===undefined?!!b.showApprovalBox:!!s.showApprovalBox,

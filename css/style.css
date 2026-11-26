@@ -121,11 +121,12 @@ body {
 .attendance-meta span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .attendance-meta strong { margin-right:1mm; }
 .attendance-meta .page-count { font-weight:700; }
-.attendance-columns { flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr; gap:3mm; align-items:stretch; }
-.attendance-table { width:100%; height:100%; table-layout:fixed; border-collapse:collapse; }
+.attendance-columns { flex:none; display:grid; grid-template-columns:1fr 1fr; gap:3mm; align-items:start; }
+.attendance-columns.single-column { grid-template-columns:1fr; }
+.attendance-table { width:100%; table-layout:fixed; border-collapse:collapse; }
 .attendance-table th,.attendance-table td { border:1px solid #1f2937; padding:.3mm; text-align:center; vertical-align:middle; font-size:10pt; line-height:1.05; overflow:hidden; }
 .attendance-table th { height:6mm; box-sizing:border-box; background:#e2e8f0; font-size:10pt; font-weight:700; }
-.attendance-table .attendance-row { height:7.55mm; }
+.attendance-table .attendance-row { height:var(--attendance-row-height,8mm); break-inside:avoid; }
 .attendance-table .col-number { width:8mm; }
 .attendance-table .col-dept { width:21mm; overflow-wrap:anywhere; }
 .attendance-table .col-name { width:17mm; font-weight:600; overflow-wrap:anywhere; }
@@ -133,6 +134,9 @@ body {
 .attendance-table .col-note > div { max-height:7.5mm; overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .attendance-table .col-sign { width:auto; padding:.25mm; }
 .attendance-table .col-sign img { display:block; max-width:22mm; max-height:6.5mm; object-fit:contain; margin:auto; }
+.single-column .col-dept { width:45mm; }
+.single-column .col-name { width:28mm; }
+.single-column .col-note { width:45mm; }
 .attendance-reason { display:block; color:#475569; font-size:7.5px; line-height:1.05; white-space:normal; word-break:keep-all; }
 .attendance-footer { height:17mm; flex:none; display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:5mm; padding:2mm 2mm 0; font-size:9px; box-sizing:border-box; }
 .attendance-footer strong { font-size:10px; }
